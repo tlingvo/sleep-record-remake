@@ -1,0 +1,62 @@
+{
+  "settings": {
+    "dayStartHour": "5",
+    "cycleLengthDays": "3",
+    "sleepStartHour": "23",
+    "sleepEndHour": "5",
+    "hideDetail": "false",
+    "chatApiKey": ""
+  },
+  "hourlyRecords": [
+    {
+      "hourStartMs": 1749999600000,
+      "totalUsageMs": 120000,
+      "score": 58,
+      "deduction": 2,
+      "bonusScore": 50,
+      "lastUpdated": 1749999720000
+    },
+    {
+      "hourStartMs": 1750003200000,
+      "totalUsageMs": 0,
+      "score": 60,
+      "deduction": 0,
+      "bonusScore": 0,
+      "lastUpdated": 1750003260000
+    }
+  ],
+  "appUsageEntries": [
+    {
+      "hourStartMs": 1749999600000,
+      "packageName": "com.example.reader",
+      "totalTimeMs": 120000,
+      "lastEventTime": 1749999600000,
+      "isScreenEvent": false
+    },
+    {
+      "hourStartMs": 1749999600000,
+      "packageName": "屏幕锁定",
+      "totalTimeMs": 1749999720000,
+      "lastEventTime": 1749999720000,
+      "isScreenEvent": true
+    }
+  ],
+  "chatData": {
+    "conversations": "[{\"id\":\"1749999601000\",\"title\":\"挑战: 说服AI晚睡\",\"messages\":[{\"role\":\"assistant\",\"content\":\"你好！建议你现在去睡觉。\",\"timestamp\":1749999601000}],\"type\":\"TASK\",\"boundChallengeTaskId\":\"1749999600000\",\"systemPrompt\":\"你是一位睡眠助手。\",\"isCompleted\":false,\"roles\":[{\"name\":\"system\",\"type\":\"system\",\"isActive\":false,\"archived\":false},{\"name\":\"用户\",\"type\":\"user\",\"isActive\":false,\"archived\":false},{\"name\":\"assistant\",\"type\":\"assistant\",\"isActive\":true,\"archived\":false}],\"selectedRoleName\":\"用户\",\"showSystemMessages\":true,\"aiEnabled\":true,\"assistantBackup\":[],\"showMessageTime\":true}]",
+    "chat_day_key": "2025-06-15",
+    "chat_day_chars": 299
+  },
+  "challengeData": {
+    "tasks": "[{\"id\":\"1749999600000\",\"name\":\"说服AI晚睡\",\"description\":\"与AI对话，说服它允许你晚睡\",\"points\":10,\"status\":\"IN_PROGRESS\",\"createdAt\":1749999600000,\"boundConversationId\":\"1749999601000\"}]"
+  },
+  "checkinData": {
+    "last_checkin_date": "2025-06-15",
+    "streak_days": 3
+  },
+  "oneTimeData": {
+    "completed_tasks": "[\"深呼吸练习\"]"
+  },
+  "appData": {
+    "notice_shown": true
+  }
+}
