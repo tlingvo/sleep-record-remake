@@ -4,6 +4,8 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
+import android.view.View
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import java.util.Locale
 
@@ -27,13 +29,49 @@ internal fun MainActivity.renderStats() {
     val today = config.date(ms)
     val hour = localHour(ms)
     val rate = if (config.asleep(hour)) String.format(Locale.ROOT, "当前每分钟扣 %.2f 分", config.rate(hour)) else null
-    title("睡眠分数", subtitle = rate, actions = arrayOf(
-        (if (refreshing) "刷新中" else "刷新") to { refresh(true) }, "关于" to {
+    val page = FrameLayout(this)
+    val (scroll, content) = scrollBox(body, 18)
+    body.removeView(scroll)
+    val contentHeader = row().apply {
+        setPadding(0, dp(12), 0, dp(14))
+        minimumHeight = dp(71)
+        val texts = vertical().apply {
+            label("睡眠分数", 28, bold = true)
+            if (rate != null) label(rate, 12, palette.muted, gap = 6)
+        }
+        addView(texts, LinearLayout.LayoutParams(0, -2, 1f))
+        val refresh = iconButton(Glyph.REFRESH, if (refreshing) "刷新中" else "刷新") { refresh(true) }
+        addView(refresh, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginStart = dp(7) })
+        val about = iconButton(Glyph.INFO, "关于") {
             panelDialog("关于睡眠分数", "连续记录按每 ${config.number("cycleLengthDays")} 天分为一个周期。睡眠区 ${clockHour(config.start)}–${clockHour(config.end)} 内，空闲分钟得分，手机使用按小时费率扣分。百分比以周期理论分值为基准，额外加分可使结果超出原范围。", "功能介绍", "关闭") {
                 open(Screen("question", "功能介绍1"))
             }
-        }))
-    val content = scroller(body)
+        }
+        addView(about, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginStart = dp(7) })
+    }
+    content.addView(contentHeader, 0)
+    page.addView(scroll, FrameLayout.LayoutParams(-1, -1))
+    val compactTitle = text("睡眠分数", 15, palette.text, true).apply {
+        gravity = Gravity.CENTER
+        alpha = 0f
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        background = shape(palette.bg.withOpacity(0xEE), 0)
+        elevation = dp(2).toFloat()
+    }
+    page.addView(compactTitle, FrameLayout.LayoutParams(-1, dp(52), Gravity.TOP))
+    fun updateTitle() {
+        val progress = ((scroll.scrollY - dp(42)).toFloat() / dp(76)).coerceIn(0f, 1f)
+        compactTitle.alpha = progress
+        compactTitle.translationY = -dp(10) * (1f - progress)
+        compactTitle.importantForAccessibility = if (progress > .5f) View.IMPORTANT_FOR_ACCESSIBILITY_YES else View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+    scroll.setOnScrollChangeListener { _, _, _, _, _ ->
+        updateTitle()
+        invalidateNavBackdrop()
+    }
+    page.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateTitle() }
+    updateTitle()
+    body.addView(page, LinearLayout.LayoutParams(-1, 0, 1f))
     val cycles = store.overview(ms)
     val current = cycles.lastOrNull()
     val percentage = config.flag("usePercentageScoring")

@@ -305,7 +305,10 @@ class MainActivity : Activity() {
     }
     internal fun chatComposerBottomInset() = dp(82)
     internal val navBackdropSource: View get() = scene
-    internal fun invalidateNavBackdrop() { (navView as? NavDock)?.refreshBackdrop() }
+    internal fun invalidateNavBackdrop() {
+        (navView as? NavDock)?.refreshBackdrop()
+        if (inChat()) chat.refreshComposerBackdrop()
+    }
     internal fun refreshNavBackdropDuring(durationMs: Long = 420) {
         navBackdropUntil = SystemClock.uptimeMillis() + durationMs
         handler.removeCallbacks(navBackdropPulse)

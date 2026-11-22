@@ -35,7 +35,8 @@ internal class NavDock(private val a: MainActivity, private val from: Int, val i
     init {
         val gap = a.dp(13)
         val frame = FrameLayout(a).apply {
-            backdrop = BackdropBlurView(a, a.navBackdropSource)
+            backdrop = BackdropBlurView(a, a.navBackdropSource, blurRadius = a.dp(7).toFloat(),
+                tint = a.palette.bg.withOpacity(0x40))
             addView(backdrop, LayoutParams(-1, -1))
             foreground = a.shape(Color.TRANSPARENT, 24, a.palette.stroke)
         }
@@ -74,12 +75,18 @@ internal class NavDock(private val a: MainActivity, private val from: Int, val i
     }
 }
 
-private class BackdropBlurView(context: Context, private val source: View) : View(context) {
-    private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        if (Build.VERSION.SDK_INT >= 31) setRenderEffect(RenderEffect.createBlurEffect(4.5f, 4.5f, Shader.TileMode.CLAMP))
+internal class BackdropBlurView(context: Context, private val source: View,
+                                private val cornerRadius: Int = 24, blurRadius: Float = 4.5f,
+                                private val baseColor: Int = Color.TRANSPARENT, private val tint: Int = Color.TRANSPARENT,
+                                private val fallbackTint: Int = Color.argb(22, 155, 170, 220)) : View(context) {
+    private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+        if (Build.VERSION.SDK_INT >= 31) setRenderEffect(RenderEffect.createBlurEffect(blurRadius, blurRadius, Shader.TileMode.CLAMP))
     }
     private var snapshot: Bitmap? = null
-    private val sampling = .25f
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        setMeasuredDimension(resolveSize(0, widthMeasureSpec), resolveSize(0, heightMeasureSpec))
+    }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
@@ -89,23 +96,22 @@ private class BackdropBlurView(context: Context, private val source: View) : Vie
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        if (Build.VERSION.SDK_INT < 31) {
-            canvas.drawColor(Color.argb(22, 155, 170, 220))
+        if (Build.VERSION.SDK_INT < 31 || !canvas.isHardwareAccelerated) {
+            canvas.drawColor(fallbackTint)
             return
         }
-        val bitmapWidth = (width * sampling).toInt().coerceAtLeast(1)
-        val bitmapHeight = (height * sampling).toInt().coerceAtLeast(1)
-        val bitmap = snapshot?.takeIf { it.width == bitmapWidth && it.height == bitmapHeight }
-            ?: Bitmap.createBitmap(bitmapWidth, bitmapHeight, Bitmap.Config.ARGB_8888).also { snapshot = it }
-        bitmap.eraseColor(Color.TRANSPARENT)
+        if (width == 0 || height == 0) return
+        // Capture at the display scale so software-rendered text and bitmap content stay aligned.
+        val bitmap = snapshot ?: Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { snapshot = it }
+        bitmap.eraseColor(baseColor)
         val sourcePosition = IntArray(2).also(source::getLocationOnScreen)
         val glassPosition = IntArray(2).also(::getLocationOnScreen)
         val capture = Canvas(bitmap).apply {
-            scale(sampling, sampling)
             translate((glassPosition[0] - sourcePosition[0]) * -1f, (glassPosition[1] - sourcePosition[1]) * -1f)
         }
         source.draw(capture)
-        val radius = context.resources.displayMetrics.density * 24f
+        capture.drawColor(tint)
+        val radius = context.dp(cornerRadius).toFloat()
         val clip = android.graphics.Path().apply {
             addRoundRect(RectF(0f, 0f, this@BackdropBlurView.width.toFloat(), this@BackdropBlurView.height.toFloat()),
                 radius, radius, android.graphics.Path.Direction.CW)
@@ -142,8 +148,10 @@ internal class GlyphView(context: Context, private val glyph: Glyph, private val
                 ink.style = Paint.Style.STROKE
             }
             Glyph.REFRESH -> {
-                c.drawArc(-6.2f, -6.2f, 6.2f, 6.2f, -42f, 286f, false, ink)
-                l(5.2f, -5.4f, 5.2f, -1.7f); l(5.2f, -5.4f, 1.5f, -5.4f)
+                ink.style = Paint.Style.STROKE
+                c.drawArc(-6.2f, -6.2f, 6.2f, 6.2f, 10f, 310f, false, ink)
+                l(4.75f, -4f, 4.75f, -7.6f); l(4.75f, -4f, 1.15f, -4f)
+                ink.style = Paint.Style.FILL
             }
             Glyph.SEND -> {
                 val path = android.graphics.Path().apply {
@@ -156,10 +164,10 @@ internal class GlyphView(context: Context, private val glyph: Glyph, private val
         c.restore()
     }
 }
-internal fun MainActivity.iconButton(glyph: Glyph, description: String, onClick: () -> Unit) = GlyphView(this, glyph, palette.accent).apply {
+internal fun MainActivity.iconButton(glyph: Glyph, description: String, fill: Int = palette.raised, onClick: () -> Unit) = GlyphView(this, glyph, palette.accent).apply {
     minimumHeight = dp(44); minimumWidth = dp(44)
     contentDescription = description
-    clickable(this, palette.raised, 15, onClick)
+    clickable(this, fill, 15, onClick)
     accessibilityDelegate = object : View.AccessibilityDelegate() {
         override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfo) {
             super.onInitializeAccessibilityNodeInfo(host, info); info.className = "android.widget.Button"
@@ -180,7 +188,7 @@ internal class ToggleControl(private val a: MainActivity, label: String, value: 
             val h = a.dp(if (compact) 18 else 22).toFloat()
             val left = (width - w) / 2f
             val cy = height / 2f
-            pen.color = mix(a.palette.raised, a.palette.accent, knob)
+            pen.color = mix(a.palette.raised, a.palette.accent, knob).let { if (compact) it.withOpacity(0xD0) else it }
             val rect = RectF(left, cy - h / 2, left + w, cy + h / 2)
             pen.style = Paint.Style.FILL
             c.drawRoundRect(rect, h, h, pen)

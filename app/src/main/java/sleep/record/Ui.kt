@@ -23,6 +23,7 @@ import android.widget.TextView
 import kotlin.math.roundToInt
 
 internal fun color(hex: String) = Color.parseColor(hex)
+internal fun Int.withOpacity(alpha: Int) = (this and 0x00ffffff) or (alpha shl 24)
 internal data class Palette(val dark: Boolean, val bg: Int, val surface: Int, val raised: Int, val stroke: Int,
                             val text: Int, val muted: Int, val accent: Int, val onAccent: Int, val green: Int, val amber: Int, val red: Int) {
     companion object {
@@ -65,13 +66,13 @@ context(a: MainActivity) internal fun LinearLayout.card(gap: Int = 12, fill: Int
     it.background = a.shape(fill, 22, a.palette.stroke)
     addView(it, LinearLayout.LayoutParams(-1, -2).apply { topMargin = a.dp(gap) })
 }
-internal fun MainActivity.button(label: String, primary: Boolean = false, enabled: Boolean = true, onClick: () -> Unit): TextView =
+internal fun MainActivity.button(label: String, primary: Boolean = false, enabled: Boolean = true, fill: Int? = null, onClick: () -> Unit): TextView =
     text(label, 14, if (!enabled) palette.muted else if (primary) palette.onAccent else palette.accent, true).apply {
         gravity = Gravity.CENTER
         minHeight = dp(46)
         setPadding(dp(13), dp(7), dp(13), dp(7))
-        val fill = if (primary && enabled) palette.accent else palette.raised
-        if (enabled) clickable(this, fill, 15, onClick) else { background = shape(fill, 15); alpha = .55f; isEnabled = false }
+        val surface = fill ?: if (primary && enabled) palette.accent else palette.raised
+        if (enabled) clickable(this, surface, 15, onClick) else { background = shape(surface, 15); alpha = .55f; isEnabled = false }
         accessibilityClassNameOverride(this)
     }
 private fun accessibilityClassNameOverride(view: TextView) {
@@ -83,7 +84,7 @@ private fun accessibilityClassNameOverride(view: TextView) {
     }
 }
 context(a: MainActivity) internal fun LinearLayout.action(label: String, primary: Boolean = false, enabled: Boolean = true, onClick: () -> Unit): TextView {
-    val button = a.button(label, primary, enabled, onClick)
+    val button = a.button(label, primary, enabled, onClick = onClick)
     addView(button, LinearLayout.LayoutParams(-1, -2).apply { topMargin = a.dp(11) })
     return button
 }
@@ -112,7 +113,7 @@ internal fun MainActivity.title(heading: String, back: Boolean = false, subtitle
                                 vararg actions: Pair<String, () -> Unit>) {
     val line = row().apply { setPadding(dp(19), dp(12), dp(16), dp(14)); minimumHeight = dp(71) }
     val icon = when {
-        leading != null && onLeading != null -> iconButton(leading.first, leading.second, onLeading)
+        leading != null && onLeading != null -> iconButton(leading.first, leading.second, onClick = onLeading)
         back -> iconButton(if (overlayPage == null) Glyph.BACK else Glyph.CLOSE, "返回") { closePage() }
         else -> null
     }
@@ -131,7 +132,7 @@ internal fun MainActivity.title(heading: String, back: Boolean = false, subtitle
             "关于" -> Glyph.INFO
             else -> null
         }
-        val button = if (glyph != null) iconButton(glyph, label, fn) else this.button(label, onClick = fn)
+        val button = if (glyph != null) iconButton(glyph, label, onClick = fn) else this.button(label, onClick = fn)
         line.addView(button, LinearLayout.LayoutParams(if (glyph != null) dp(44) else -2, if (glyph != null) dp(44) else -2)
             .apply { marginStart = dp(7) })
     }

@@ -14,8 +14,8 @@ android {
         applicationId = "sleep.record"
         minSdk = 24
         targetSdk = 36
-        versionCode = 3
-        versionName = "2.1"
+        versionCode = 4
+        versionName = "2.1.2"
         val publicKey = providers.gradleProperty("sleepPublicChatKey").orElse("sk-5hvOF4SWqKVLDYI3KNxGl7C0n2qp3kSPKgVLQqPmItOXT7eR").get()
         buildConfigField("String", "PUBLIC_CHAT_KEY", "\"${publicKey.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
 

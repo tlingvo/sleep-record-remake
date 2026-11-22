@@ -27,6 +27,7 @@ internal class ChatUi(private val a: MainActivity) {
     private var partial = ""
     private var streamLabel: TextView? = null
     private var transcript: ScrollView? = null
+    private var composerBackdrop: View? = null
     private val drafts = mutableMapOf<String, String>()
     private var avatarRole: String? = null
     private var photo: Bitmap? = null
@@ -64,6 +65,7 @@ internal class ChatUi(private val a: MainActivity) {
         a.selectTab(1)
     }
     fun discardPhoto() { photo = null; avatarRole = null }
+    fun refreshComposerBackdrop() { composerBackdrop?.takeIf { it.isAttachedToWindow }?.invalidate() }
     fun reload() { cancel(); currentId = null; auto = null; drafts.clear() }
     fun cancel(repaint: Boolean = true) {
         stream?.cancel(); stream = null; partial = ""
@@ -135,10 +137,12 @@ internal class ChatUi(private val a: MainActivity) {
         val isTask = row.taskChat()
         val completed = row.optBoolean("isCompleted")
         val showSystem = row.optBoolean("showSystemMessages", true)
-        val avatars = !isTask && row.text("subType") in listOf("SELF_CHAT", "ROLEPLAY") && store.state().optBoolean("show_avatars", true)
+        val state = store.state()
+        val avatars = !isTask && state.optBoolean("show_avatars", true)
         val selected = if (isTask) "用户" else row.text("selectedRoleName", "我")
         val roles = row.roles().associateBy { it.text("name") }
-        val avatarMap = store.state().optJSONObject("avatar_map") ?: JSONObject()
+        val avatarMap = state.optJSONObject("avatar_map") ?: JSONObject()
+        composerBackdrop = null
         title(row.text("title", "新对话"), subtitle = if (isTask) "任务会话" else if (row.text("subType") == "SELF_CHAT") "离线 · 自我对话" else "不想睡觉",
             leading = Glyph.MENU to "会话", onLeading = { open(Screen("chat-drawer")) },
             actions = arrayOf("选项" to { open(Screen("chat-settings")) }))
@@ -157,9 +161,10 @@ internal class ChatUi(private val a: MainActivity) {
                 false
             }
         }
-        val content = vertical().apply { setPadding(dp(18), dp(2), dp(18), dp(178)) }
+        val content = vertical().apply { setPadding(dp(18), dp(2), dp(18), chatComposerBottomInset() + dp(12)) }
         scroll.addView(content, FrameLayout.LayoutParams(-1, -2))
-        dock.addView(scroll, FrameLayout.LayoutParams(-1, -1))
+        val messagesLayer = FrameLayout(this).apply { addView(scroll, FrameLayout.LayoutParams(-1, -1)) }
+        dock.addView(messagesLayer, FrameLayout.LayoutParams(-1, -1))
         scrollTarget(scroll, body)
         transcript = scroll
         val messages = row.list("messages")
@@ -190,13 +195,32 @@ internal class ChatUi(private val a: MainActivity) {
         if (completed) {
             content.card().label("挑战已完成，请在任务页领取奖励。", tint = palette.green)
         } else {
-            val panel = vertical().apply { setPadding(dp(14), 0, dp(14), dp(5)) }
+            val controlFill = palette.raised.withOpacity(0xB8)
+            val glass = FrameLayout(this).apply {
+                background = shape(Color.TRANSPARENT, 21)
+                clipToOutline = true
+            }
+            val backdrop = BackdropBlurView(this, messagesLayer, cornerRadius = 21, blurRadius = dp(11).toFloat(),
+                baseColor = palette.bg, tint = palette.bg.withOpacity(0x55), fallbackTint = palette.bg.withOpacity(0xDF))
+            composerBackdrop = backdrop
+            glass.addView(backdrop, FrameLayout.LayoutParams(-1, -1))
+            glass.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
+                backdrop.invalidate()
+                val clearance = bottom - top + chatComposerBottomInset() + dp(12)
+                if (content.paddingBottom != clearance) {
+                    val follow = content.height - scroll.height - scroll.scrollY <= dp(24)
+                    content.setPadding(content.paddingLeft, content.paddingTop, content.paddingRight, clearance)
+                    if (follow) scroll.post { scroll.scrollTo(0, content.height) }
+                }
+            }
+            content.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> backdrop.invalidate() }
+            val panel = vertical().apply { setPadding(dp(6), dp(2), dp(6), dp(5)) }
             val controls = row().apply { gravity = Gravity.BOTTOM }
             if (!isTask) {
                 val meta = row().apply { minimumHeight = dp(43); setPadding(dp(5), 0, dp(5), 0); gravity = Gravity.CENTER_VERTICAL }
                 val roles = row.usableRoles().map { it.text("name") }
                 lateinit var identity: TextView
-                identity = button("$selected  ▾", enabled = stream == null && roles.isNotEmpty()) {
+                identity = button("$selected  ▾", enabled = stream == null && roles.isNotEmpty(), fill = controlFill) {
                     popup(identity, roles, roles.indexOf(selected)) { i ->
                         chats.edit(id) { chat, _ -> chat.put("selectedRoleName", roles[i]) }; render()
                     }
@@ -215,12 +239,12 @@ internal class ChatUi(private val a: MainActivity) {
                 meta.addView(reply, LinearLayout.LayoutParams(-2, -2))
                 panel.addView(meta, LinearLayout.LayoutParams(-1, dp(43)))
             }
-            composer.background = shape(palette.raised, 16, palette.stroke)
+            composer.background = shape(controlFill, 16, palette.stroke.withOpacity(0xA0))
             composer.minHeight = dp(52)
             composer.maxHeight = dp(176)
             composer.setPadding(dp(14), dp(10), dp(14), dp(9))
             controls.addView(composer, LinearLayout.LayoutParams(0, -2, 1f))
-            val send = iconButton(Glyph.SEND, "发送") {
+            val send = iconButton(Glyph.SEND, "发送", fill = controlFill) {
                 val value = composer.text.toString().trim()
                 if (value.isNotBlank() && stream == null) {
                     val request = chats.send(id, value, auto == true)
@@ -230,7 +254,9 @@ internal class ChatUi(private val a: MainActivity) {
             }.apply { isEnabled = stream == null }
             controls.addView(send, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginStart = dp(8) })
             panel.addView(controls, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(5) })
-            dock.addView(panel, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply {
+            glass.addView(panel, FrameLayout.LayoutParams(-1, -2))
+            dock.addView(glass, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply {
+                marginStart = dp(8); marginEnd = dp(8)
                 bottomMargin = chatComposerBottomInset()
             })
         }
@@ -238,18 +264,48 @@ internal class ChatUi(private val a: MainActivity) {
     }
     private fun bubble(parent: LinearLayout, name: String, value: String, time: String, own: Boolean, system: Boolean,
                        avatars: Boolean, avatarMap: JSONObject): TextView = with(a) {
-        val line = row().apply { gravity = if (own) Gravity.END or Gravity.TOP else Gravity.TOP }
-        val wrap = vertical().apply {
-            setPadding(dp(13), dp(8), dp(13), dp(10))
-            background = shape(if (own) palette.raised else palette.surface, 15, palette.stroke)
+        val align = when {
+            system -> Gravity.CENTER_HORIZONTAL
+            own -> Gravity.END
+            else -> Gravity.START
         }
-        if (avatars && !system && !own) line.addView(avatar(name, avatarMap), LinearLayout.LayoutParams(dp(34), dp(34)).apply { marginEnd = dp(7) })
-        val w = (resources.displayMetrics.widthPixels * .72f).toInt()
-        wrap.label((if (system) "系统" else name) + if (time.isNotEmpty()) "  $time" else "", 11, palette.muted, bold = true).maxWidth = w
-        val message = wrap.label(value, 15, if (system) palette.accent else palette.text, gap = 4).apply { maxWidth = w }
-        line.addView(wrap, LinearLayout.LayoutParams(-2, -2))
-        if (avatars && !system && own) line.addView(avatar(name, avatarMap), LinearLayout.LayoutParams(dp(34), dp(34)).apply { marginStart = dp(7) })
-        parent.addView(line, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
+        val line = FrameLayout(this)
+        val column = vertical().apply { gravity = align }
+        val width = (resources.displayMetrics.widthPixels * .72f).toInt()
+        val nameLabel = text(if (system) "系统" else name, 12, palette.muted).apply {
+            maxWidth = width
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        column.addView(nameLabel, LinearLayout.LayoutParams(-2, -2))
+        val fill = when {
+            system -> if (palette.dark) color("#293D63") else color("#E2EBFB")
+            own -> palette.raised
+            else -> palette.surface
+        }
+        val message = text(value, 15, if (system) palette.accent else palette.text).apply {
+            maxWidth = width
+            gravity = if (system) Gravity.CENTER else Gravity.START
+            setPadding(dp(13), dp(9), dp(13), dp(10))
+            background = shape(fill, 15, if (system) null else palette.stroke)
+        }
+        column.addView(message, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(5) })
+        if (time.isNotEmpty()) {
+            column.addView(text(time, 11, palette.muted), LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(5) })
+        }
+        val showAvatar = avatars && !system
+        val avatarSize = dp(40)
+        line.addView(column, FrameLayout.LayoutParams(-2, -2, align or Gravity.TOP).apply {
+            if (showAvatar) {
+                if (own) marginEnd = avatarSize + dp(8) else marginStart = avatarSize + dp(8)
+            }
+        })
+        if (showAvatar) {
+            line.addView(avatar(name, avatarMap), FrameLayout.LayoutParams(avatarSize, avatarSize, align or Gravity.TOP).apply {
+                topMargin = dp(7)
+            })
+        }
+        parent.addView(line, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(if (system) 12 else 10) })
         message
     }
     private fun messageOptions(id: String, index: Int, msg: JSONObject, anchor: View) = with(a) {
@@ -282,6 +338,7 @@ internal class ChatUi(private val a: MainActivity) {
                 val scroll = transcript
                 val follow = scroll?.let { it.getChildAt(0).height - it.height - it.scrollY < dp(100) } ?: false
                 streamLabel?.text = text
+                refreshComposerBackdrop()
                 if (follow) scroll?.post { scroll.scrollTo(0, scroll.getChildAt(0).height) }
             }
         }, onFinish = { result ->
@@ -502,7 +559,9 @@ internal class ChatUi(private val a: MainActivity) {
             check(file.parentFile == dir)
             BitmapFactory.decodeFile(file.path)
         }.getOrNull()
-        if (bitmap == null) text(name.take(1), 14, palette.accent, true).apply { gravity = Gravity.CENTER; background = shape(palette.raised, 18) }
+        if (bitmap == null) text(name.take(1), 14, palette.accent, true).apply {
+            gravity = Gravity.CENTER; background = shape(palette.raised, 20); contentDescription = "$name 头像"
+        }
         else ImageView(this).apply {
             setImageBitmap(bitmap); scaleType = ImageView.ScaleType.CENTER_CROP
             background = shape(palette.raised, 20); clipToOutline = true; contentDescription = "$name 头像"
