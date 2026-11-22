@@ -109,7 +109,7 @@ class SleepService : Service() {
             manager.notify(1002, builder(BEDTIME, "睡觉时间到了！", String.format(Locale.ROOT, "设定睡眠时间 %02d:00，准备放下手机休息吧。", config.start), false).build())
         } else if (!config.flag("showSleepTimeNotification")) manager.cancel(1002)
         if (allowed && config.flag("showPenaltyNotification")) {
-            manager.notify(1001, builder(RATE, "当前扣分率", String.format(Locale.ROOT, "每分钟扣 %.1f 分", config.rate(hour)), true).build())
+            manager.notify(1001, builder(RATE, "当前扣分率", String.format(Locale.ROOT, "每分钟扣 %.2f 分", config.rate(hour)), true).build())
         } else manager.cancel(1001)
         handler.postDelayed(tick, config.number("notificationCheckIntervalSec") * 1000L)
     }

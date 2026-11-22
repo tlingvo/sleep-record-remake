@@ -11,6 +11,7 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.widget.ImageView
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -29,6 +30,8 @@ internal class ChatUi(private val a: MainActivity) {
     private val drafts = mutableMapOf<String, String>()
     private var avatarRole: String? = null
     private var photo: Bitmap? = null
+    private var archivedRolesExpanded = false
+    private var roleHistoryExpanded = false
 
     private fun current(): JSONObject {
         val list = a.chats.load()
@@ -73,7 +76,7 @@ internal class ChatUi(private val a: MainActivity) {
         title("会话", back = true, subtitle = "切换或新建对话")
         val content = scroller(body, pad = 14)
         val kinds = listOf("新建普通对话" to "", "新建角色扮演" to "ROLEPLAY", "新建自我对话" to "SELF_CHAT")
-        selector(content, "新建会话", "选择类型", kinds.map { it.first }, -1) { switchTo(chats.create(kinds[it].second)) }
+        selector(content, "新建会话", "选择模板", kinds.map { it.first }, -1) { switchTo(chats.create(kinds[it].second)) }
         section(content, "用户会话")
         for (chat in list.filterNot { it.taskChat() }) conversationRow(content, chat, true)
         section(content, "任务会话")
@@ -139,7 +142,25 @@ internal class ChatUi(private val a: MainActivity) {
         title(row.text("title", "新对话"), subtitle = if (isTask) "任务会话" else if (row.text("subType") == "SELF_CHAT") "离线 · 自我对话" else "不想睡觉",
             leading = Glyph.MENU to "会话", onLeading = { open(Screen("chat-drawer")) },
             actions = arrayOf("选项" to { open(Screen("chat-settings")) }))
-        val (scroll, content) = scrollBox(body)
+        val dock = FrameLayout(this)
+        body.addView(dock, LinearLayout.LayoutParams(-1, 0, 1f))
+        val scroll = ScrollView(this).apply {
+            clipToPadding = false
+            isFillViewport = false
+            isVerticalScrollBarEnabled = false
+            setOnScrollChangeListener { _, _, _, _, _ -> invalidateNavBackdrop() }
+            setOnTouchListener { _, event ->
+                when (event.actionMasked) {
+                    android.view.MotionEvent.ACTION_MOVE -> invalidateNavBackdrop()
+                    android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> refreshNavBackdropDuring()
+                }
+                false
+            }
+        }
+        val content = vertical().apply { setPadding(dp(18), dp(2), dp(18), dp(178)) }
+        scroll.addView(content, FrameLayout.LayoutParams(-1, -2))
+        dock.addView(scroll, FrameLayout.LayoutParams(-1, -1))
+        scrollTarget(scroll, body)
         transcript = scroll
         val messages = row.list("messages")
         val composer = input(drafts[id].orEmpty(), if (completed) "该任务会话已完成" else "输入消息", single = false).apply {
@@ -169,38 +190,49 @@ internal class ChatUi(private val a: MainActivity) {
         if (completed) {
             content.card().label("挑战已完成，请在任务页领取奖励。", tint = palette.green)
         } else {
-            val panel = vertical().apply { setPadding(dp(14), dp(3), dp(14), dp(9)); setBackgroundColor(palette.bg) }
+            val panel = vertical().apply { setPadding(dp(14), 0, dp(14), dp(5)) }
+            val controls = row().apply { gravity = Gravity.BOTTOM }
             if (!isTask) {
-                val meta = row().apply { minimumHeight = dp(43) }
+                val meta = row().apply { minimumHeight = dp(43); setPadding(dp(5), 0, dp(5), 0); gravity = Gravity.CENTER_VERTICAL }
                 val roles = row.usableRoles().map { it.text("name") }
                 lateinit var identity: TextView
                 identity = button("$selected  ▾", enabled = stream == null && roles.isNotEmpty()) {
                     popup(identity, roles, roles.indexOf(selected)) { i ->
                         chats.edit(id) { chat, _ -> chat.put("selectedRoleName", roles[i]) }; render()
                     }
-                }.apply { minHeight = dp(36); maxWidth = dp(174); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+                }.apply {
+                    minHeight = dp(40); setPadding(dp(11), dp(4), dp(11), dp(4))
+                    maxWidth = dp(174); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                }
                 meta.addView(identity, LinearLayout.LayoutParams(-2, -2))
                 meta.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
                 val available = row.optBoolean("aiEnabled", true) && row.assistant() != null
-                val reply = ToggleControl(this, "自动回复", available && auto == true, compact = true).apply {
+                val reply = ToggleControl(this, "请求AI", available && auto == true, compact = true).apply {
+                    minimumHeight = dp(40)
                     isEnabled = available && stream == null
                     onChecked { _, checked -> auto = checked }
                 }
                 meta.addView(reply, LinearLayout.LayoutParams(-2, -2))
-                panel.addView(meta)
+                panel.addView(meta, LinearLayout.LayoutParams(-1, dp(43)))
             }
-            val controls = row()
+            composer.background = shape(palette.raised, 16, palette.stroke)
+            composer.minHeight = dp(52)
+            composer.maxHeight = dp(176)
+            composer.setPadding(dp(14), dp(10), dp(14), dp(9))
             controls.addView(composer, LinearLayout.LayoutParams(0, -2, 1f))
-            controls.addView(button("发送", true, stream == null) {
+            val send = iconButton(Glyph.SEND, "发送") {
                 val value = composer.text.toString().trim()
                 if (value.isNotBlank() && stream == null) {
                     val request = chats.send(id, value, auto == true)
                     drafts.remove(id)
                     if (request == null) render() else start(request)
                 }
-            }, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(7) })
-            panel.addView(controls)
-            body.addView(panel)
+            }.apply { isEnabled = stream == null }
+            controls.addView(send, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginStart = dp(8) })
+            panel.addView(controls, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(5) })
+            dock.addView(panel, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply {
+                bottomMargin = chatComposerBottomInset()
+            })
         }
         scroll.post { scroll.scrollTo(0, content.height) }
     }
@@ -300,28 +332,138 @@ internal class ChatUi(private val a: MainActivity) {
         switch(general, "启用 AI", c.optBoolean("aiEnabled", true)) { value ->
             cancel(); auto = null; change { chats.toggleAi(it, value) }
         }
-        general.action("立刻请求回复", enabled = c.optBoolean("aiEnabled", true) && c.assistant() != null && stream == null) { start(chats.manual(id)) }
-        section(content, "角色")
-        val roles = content.card()
-        c.roles().forEach { role ->
-            val name = role.text("name")
-            if (role.text("type") == "system") roles.label("system  ·  系统", 14, palette.muted, gap = 8)
-            else anchoredEntry(roles, name, if (role.optBoolean("archived")) "已归档" else if (role.text("type") == "assistant") "助手" else "用户") { roleOptions(id, role, it) }
+        val actions = row().apply { gravity = Gravity.END }
+        fun smallAction(label: String, enabled: Boolean = true, danger: Boolean = false, onClick: () -> Unit) {
+            val tint = if (danger) palette.red else palette.accent
+            val control = text(label, 13, tint, true).apply {
+                gravity = Gravity.CENTER
+                minHeight = dp(36)
+                setPadding(dp(13), dp(5), dp(13), dp(5))
+                alpha = if (enabled) 1f else .5f
+                if (enabled) clickable(this, tint and 0x00ffffff or (0x1c shl 24), 18, onClick)
+            }
+            actions.addView(control, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(7) })
         }
-        roles.action("添加角色") { editRole(id, null) }
-        anchoredEntry(roles, "使用过的角色") { roleHistory(id, it) }
-        content.action("清空消息") {
+        smallAction("立即请求回复", c.optBoolean("aiEnabled", true) && c.assistant() != null && stream == null) { start(chats.manual(id)) }
+        general.addView(actions, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        section(content, "角色列表")
+        val roles = content.card()
+        val avatarMap = store.state().optJSONObject("avatar_map") ?: JSONObject()
+        val roleLine = { role: JSONObject, label: String, description: String, onAvatar: (View) -> Unit, onRole: (View) -> Unit ->
+            val line = row().apply { minimumHeight = dp(55); setPadding(dp(3), dp(3), dp(3), dp(3)) }
+            val image = avatar(role.text("name"), avatarMap).apply {
+                contentDescription = "$label 头像设置"
+                clickable(this, Color.TRANSPARENT, 20) { onAvatar(this) }
+            }
+            line.addView(image, LinearLayout.LayoutParams(dp(42), dp(42)).apply { marginEnd = dp(11) })
+            val name = text(label, 15, palette.text)
+            line.addView(name, LinearLayout.LayoutParams(0, -2, 1f))
+            line.addView(text(description, 13, palette.muted), LinearLayout.LayoutParams(-2, -2))
+            val arrow = GlyphView(this, Glyph.DOWN, palette.muted).apply { rotation = -90f }
+            line.addView(arrow, LinearLayout.LayoutParams(dp(22), dp(24)))
+            clickable(line, Color.TRANSPARENT, 12) { onRole(line) }
+            line
+        }
+        c.roles().filter { it.text("type") == "system" }.forEach { role ->
+            val line = row().apply { minimumHeight = dp(42); setPadding(dp(9), dp(2), dp(9), dp(2)) }
+            line.addView(text("system · 系统", 15, palette.text), LinearLayout.LayoutParams(0, -2, 1f))
+            line.background = shape(palette.surface, 12, palette.stroke)
+            roles.addView(line)
+        }
+        val activeRoles = c.roles().filter { it.text("type") != "system" && !it.optBoolean("archived") }
+        activeRoles.forEach { role ->
+            val name = role.text("name")
+            roles.addView(roleLine(role, name, if (role.text("type") == "assistant") "助手" else "用户", {
+                popup(it, listOf("设置头像", "恢复默认头像")) { choice ->
+                    if (choice == 0) { avatarRole = name; openPhoto() } else { writeAvatar(name, null); render() }
+                }
+            }) { anchor -> roleOptions(id, role, anchor) }, LinearLayout.LayoutParams(-1, -2))
+        }
+        val archived = c.roles().filter { it.text("type") != "system" && it.optBoolean("archived") }
+        if (archived.isNotEmpty()) {
+            anchoredEntry(roles, "已归档角色 (${archived.size})", if (archivedRolesExpanded) "收起" else "展开") {
+                archivedRolesExpanded = !archivedRolesExpanded
+                render()
+            }
+            if (archivedRolesExpanded) archived.forEach { role ->
+                val name = role.text("name")
+                roles.addView(roleLine(role, name, "已归档", {
+                    popup(it, listOf("设置头像", "恢复默认头像")) { choice ->
+                        if (choice == 0) { avatarRole = name; openPhoto() } else { writeAvatar(name, null); render() }
+                    }
+                }) { anchor -> roleOptions(id, role, anchor) }, LinearLayout.LayoutParams(-1, -2))
+            }
+        }
+        val roleActions = row().apply { gravity = Gravity.START }
+        fun roleAction(label: String, danger: Boolean = false, onClick: () -> Unit) {
+            val tint = if (danger) palette.red else palette.accent
+            val control = text(label, 13, tint, true).apply {
+                gravity = Gravity.CENTER; minHeight = dp(36); setPadding(dp(13), dp(5), dp(13), dp(5))
+                clickable(this, tint and 0x00ffffff or (0x1c shl 24), 18, onClick)
+            }
+            roleActions.addView(control, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(7) })
+        }
+        roleAction("新建角色") { editRole(id, null) }
+        roles.addView(roleActions, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        val history = store.state().array("role_history").strings().filterNot { it == "system" || it == "系统" }.distinct()
+        if (history.isNotEmpty()) {
+            anchoredEntry(roles, "使用过的角色 (${history.size})", if (roleHistoryExpanded) "收起" else "展开") {
+                roleHistoryExpanded = !roleHistoryExpanded
+                render()
+            }
+            if (roleHistoryExpanded) history.forEach { name ->
+                val item = row().apply { minimumHeight = dp(52); setPadding(dp(3), dp(3), dp(3), dp(3)) }
+                item.addView(avatar(name, avatarMap), LinearLayout.LayoutParams(dp(42), dp(42)).apply { marginEnd = dp(11) })
+                item.addView(text(name, 14, palette.text), LinearLayout.LayoutParams(0, -2, 1f))
+                fun historyAction(label: String, danger: Boolean, callback: () -> Unit) {
+                    val tint = if (danger) palette.red else palette.accent
+                    val control = text(label, 13, tint, true).apply {
+                        gravity = Gravity.CENTER; minHeight = dp(35); setPadding(dp(9), dp(4), dp(9), dp(4))
+                        clickable(this, tint and 0x00ffffff or (0x1c shl 24), 17, callback)
+                    }
+                    item.addView(control, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(5) })
+                }
+                historyAction("添加", false) {
+                    chats.edit(id) { chat, state ->
+                        val existing = chat.roles().firstOrNull { it.text("name") == name }
+                        if (existing != null) { existing.put("archived", false); chat.fixSelection() }
+                        else chats.renameRole(chat, state, null, name, "user")
+                    }
+                    render()
+                }
+                historyAction("删除", true) {
+                    store.edit { state -> state.put("role_history", JSONArray(state.array("role_history").strings().filterNot { it == name })) }
+                    render()
+                }
+                roles.addView(item, LinearLayout.LayoutParams(-1, -2))
+            }
+        }
+        val clear = text("清空消息", 14, palette.red, true).apply {
+            gravity = Gravity.CENTER; minHeight = dp(43); background = shape(palette.red and 0x00ffffff or (0x1c shl 24), 14)
+        }
+        clickable(clear, palette.red and 0x00ffffff or (0x1c shl 24), 14) {
             confirm("清空消息", "清空此会话的全部消息？", "清空") { cancel(); change { it.put("messages", JSONArray()) } }
         }
+        content.addView(clear, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12); bottomMargin = dp(16) })
     }
     private fun roleOptions(id: String, role: JSONObject, anchor: View) = with(a) {
         val name = role.text("name")
         val archived = role.optBoolean("archived")
-        val options = listOf("编辑名称", if (role.text("type") == "assistant") "改为用户" else "设为助手", if (archived) "启用角色" else "删除角色", "设置头像", "恢复默认头像")
-        popup(anchor, options) { choice ->
+        val options = listOf("编辑名称", if (archived) "启用角色" else if (role.text("type") == "assistant") "改为用户" else "设为助手", "删除角色")
+        popup(anchor, options, dangerIndices = setOf(2)) { choice ->
             when (choice) {
                 0 -> editRole(id, role)
                 1 -> {
+                    if (archived) {
+                        chats.edit(id) { chat, state ->
+                            val target = chat.roles().first { it.text("name") == name }
+                            target.put("archived", false)
+                            if (target.text("type") == "assistant") chat.assignAssistant(name)
+                            state.put("role_history", JSONArray((state.array("role_history").strings() + name).distinct()))
+                        }
+                        auto = null; render()
+                        return@popup
+                    }
                     chats.edit(id) { chat, state ->
                         val target = chat.roles().first { it.text("name") == name }
                         if (target.text("type") == "assistant") { target.put("type", "user"); target.put("isActive", false) }
@@ -333,17 +475,12 @@ internal class ChatUi(private val a: MainActivity) {
                     }
                     auto = null; render()
                 }
-                2 -> if (archived) {
-                    chats.edit(id) { chat, _ -> chat.roles().first { it.text("name") == name }.put("archived", false); chat.fixSelection() }
-                    render()
-                } else {
+                2 -> {
                     val box = ToggleControl(this, "同时删除该角色的消息", false)
                     panelDialog("删除 $name", "保留消息时，该角色会进入归档。", "删除", "取消", box) {
                         chats.edit(id) { chat, _ -> chats.deleteRole(chat, name, box.isChecked()) }; render()
                     }
                 }
-                3 -> { avatarRole = name; openPhoto() }
-                4 -> { writeAvatar(name, null); render() }
             }
         }
     }
@@ -351,21 +488,6 @@ internal class ChatUi(private val a: MainActivity) {
         val old = role?.text("name")
         inputDialog(if (old == null) "添加角色" else "编辑角色名", old.orEmpty()) { value ->
             chats.edit(id) { chat, state -> chats.renameRole(chat, state, old, value.trim(), role?.text("type", "user") ?: "user") }; render()
-        }
-    }
-    private fun roleHistory(id: String, anchor: View) = with(a) {
-        val names = store.state().array("role_history").strings()
-        if (names.isEmpty()) { alert("使用过的角色", "暂无角色历史"); return@with }
-        popup(anchor, names) { i ->
-            val name = names[i]
-            popup(anchor, listOf("加入会话：$name", "从历史移除")) { action ->
-                if (action == 0) chats.edit(id) { chat, state ->
-                    val existing = chat.roles().firstOrNull { it.text("name") == name }
-                    if (existing != null) { existing.put("archived", false); chat.fixSelection() }
-                    else chats.renameRole(chat, state, null, name, "user")
-                } else store.edit { it.put("role_history", JSONArray(it.array("role_history").strings().filterNot { n -> n == name })) }
-                render()
-            }
         }
     }
     private fun avatar(name: String, mapping: JSONObject): View = with(a) {

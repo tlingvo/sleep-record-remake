@@ -6,6 +6,7 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import kotlin.math.roundToInt
 
 internal const val HOUR = 3_600_000L
@@ -25,13 +26,42 @@ internal fun clock(ms: Long) = Calendar.getInstance().apply { timeInMillis = ms 
 internal fun format(ms: Long, pattern: String) = SimpleDateFormat(pattern, Locale.ROOT).format(Date(ms))
 internal fun civil(ms: Long = now()) = format(ms, "yyyy-MM-dd")
 internal fun dateStart(date: String, hour: Int = 0): Long {
-    val parser = SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).apply { isLenient = false }
+    val utc = TimeZone.getTimeZone("UTC")
+    val parser = SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).apply { isLenient = false; timeZone = utc }
     require(date.matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}"))) { "日期格式应为 yyyy-MM-dd" }
-    return clock(parser.parse(date)!!.time).apply { set(Calendar.HOUR_OF_DAY, hour) }.timeInMillis
+    val dateFields = Calendar.getInstance(utc).apply { time = parser.parse(date)!! }
+    return Calendar.getInstance().apply {
+        clear()
+        set(dateFields.get(Calendar.YEAR), dateFields.get(Calendar.MONTH), dateFields.get(Calendar.DAY_OF_MONTH), hour, 0)
+    }.timeInMillis
 }
-internal fun hourStart(ms: Long) = clock(ms).apply {
-    set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-}.timeInMillis
+internal fun nextDate(date: String) = civil(clock(dateStart(date)).apply { add(Calendar.DAY_OF_YEAR, 1) }.timeInMillis)
+internal data class DayWindow(val start: Long, val end: Long) {
+    fun slots() = generateSequence(start, ::nextHourStart).takeWhile { it < end }
+}
+internal fun dayWindow(date: String, cutover: Int = 0) = DayWindow(dateStart(date, cutover), dateStart(nextDate(date), cutover))
+
+private fun hourOffset(ms: Long, zone: TimeZone) = Math.floorMod(ms + zone.getOffset(ms), HOUR)
+private fun offsetChange(left: Long, right: Long, zone: TimeZone): Long {
+    var low = left
+    var high = right
+    val previous = zone.getOffset(left)
+    while (high - low > 1) {
+        val mid = low + (high - low) / 2
+        if (zone.getOffset(mid) == previous) low = mid else high = mid
+    }
+    return high
+}
+internal fun hourStart(ms: Long): Long {
+    val zone = TimeZone.getDefault()
+    val nominal = ms - hourOffset(ms, zone)
+    return if (zone.getOffset(nominal) == zone.getOffset(ms)) nominal else offsetChange(nominal, ms, zone)
+}
+internal fun nextHourStart(ms: Long): Long {
+    val zone = TimeZone.getDefault()
+    val nominal = ms + HOUR - hourOffset(ms, zone)
+    return if (zone.getOffset(nominal) == zone.getOffset(ms)) nominal else offsetChange(ms, nominal, zone)
+}
 internal fun durationText(ms: Long): String {
     val seconds = (ms / 1000).coerceAtLeast(0)
     return if (seconds < 60) "${seconds}秒" else "${seconds / 60}分${seconds % 60}秒"
@@ -45,7 +75,7 @@ internal class Config(private val values: JSONObject = JSONObject()) {
             "sleepNoPhonePointPerMinute" to 1, "lateNightMaxPenaltyPerMinute" to 4, "noPhoneThresholdMs" to 1000L,
             "usePercentageScoring" to true, "darkMode" to 1, "showDebugInfo" to false, "summaryMode" to true,
             "ignoreDesktopApps" to true, "showDebugTasks" to false, "hideDetail" to true,
-            "chatApiKey" to BuildConfig.PUBLIC_CHAT_KEY, "chatProviderUrl" to "https://catbee.online/v1",
+            "chatApiKey" to BuildConfig.PUBLIC_CHAT_KEY, "chatProviderUrl" to "https://botcf.com/v1",
             "chatModel" to "deepseek-v4.1-flash", "showPenaltyNotification" to true, "showSleepTimeNotification" to true,
             "chatCharsPerPoint" to 300, "chatDailyMaxPoints" to 100, "chatCharLimit" to 100000,
             "dailyTaskBonus" to 20, "checkinBonus" to 50, "restBonus" to 45, "restDurationMin" to 3,
@@ -86,6 +116,8 @@ internal class Config(private val values: JSONObject = JSONObject()) {
     val end get() = number("sleepEndHour")
     val points get() = number("sleepNoPhonePointPerMinute")
     val maxRate get() = number("lateNightMaxPenaltyPerMinute")
+    fun sameScoringAs(other: Config) = start == other.start && end == other.end &&
+        points == other.points && maxRate == other.maxRate
     val sleepHours get() = (end - start + 23) % 24 + 1
     fun asleep(hour: Int) = if (start < end) hour in start until end else hour >= start || hour < end
     fun rate(hour: Int): Double {
@@ -95,33 +127,49 @@ internal class Config(private val values: JSONObject = JSONObject()) {
     }
     fun date(ms: Long = now()): String {
         val c = clock(ms)
-        if (c.get(Calendar.HOUR_OF_DAY) < dayStart) c.add(Calendar.DAY_OF_YEAR, -1)
+        val localDate = civil(ms)
+        val hour = c.get(Calendar.HOUR_OF_DAY)
+        if (hour < dayStart || (hour == dayStart && ms < dateStart(localDate, dayStart))) c.add(Calendar.DAY_OF_YEAR, -1)
         return civil(c.timeInMillis)
     }
+    fun window(date: String) = dayWindow(date, dayStart)
     fun score(ms: Long, usage: Long): Pair<Int, Int> {
         val hour = clock(ms).get(Calendar.HOUR_OF_DAY)
         val minutes = (usage / 60000).coerceIn(0, 60).toInt()
         return if (asleep(hour)) (60 - minutes) * points to (minutes * rate(hour)).roundToInt() else 0 to 0
     }
-    val fullMin get() = -(0..23).sumOf { (60 * rate(it)).roundToInt() }
+    val fullMin by lazy { -(0..23).sumOf { (60 * rate(it)).roundToInt() } }
     val fullMax get() = sleepHours * 60 * points
-    fun todayMax(ms: Long): Int {
-        val hour = clock(ms).get(Calendar.HOUR_OF_DAY)
-        // After midnight, the original cycle range includes all pre-cutover slots.
-        return (0..23).count { asleep(it) && (hour < dayStart || it in dayStart..hour) } * 60 * points
+    fun range(date: String, through: Long? = null): Pair<Long, Long> {
+        val window = window(date)
+        if (through == null && window.end - window.start == DAY) return fullMin.toLong() to fullMax.toLong()
+        var min = 0L
+        var max = 0L
+        for (at in window.slots()) {
+            val hour = localHour(at)
+            if (!asleep(hour)) continue
+            min -= (60 * rate(hour)).roundToInt()
+            if (through == null || at <= through) max += 60L * points
+        }
+        return min to max
     }
+    fun todayMax(ms: Long): Int = range(date(ms), ms).second.toInt()
+    fun scoringStarted(date: String, ms: Long) = window(date).slots().takeWhile { it <= ms }.any { asleep(localHour(it)) }
     fun guard(ms: Long): Long {
         val c = clock(ms)
         val h = c.get(Calendar.HOUR_OF_DAY)
         val m = c.get(Calendar.MINUTE)
-        if (dayStart < end) return if (h in dayStart until end) m.toLong() * maxRate else 0
-        if (h < dayStart && h >= end) return 0
-        val x = if (h >= start) (h - start) * 60 + m else if (h < end) (h + 24 - start) * 60 + m else 0
-        return (x * (1 + x / (60.0 * sleepHours) * (maxRate - 1))).toLong()
+        if (!asleep(h)) return 0
+        val sinceSleepStart = (h - start + 24) % 24 * 60 + m
+        val sinceDayStart = (ms - window(date(ms)).start) / 60000
+        val estimatedRate = 1 + sinceSleepStart / (60.0 * sleepHours) * (maxRate - 1)
+        return (minOf(sinceSleepStart.toLong(), sinceDayStart) * estimatedRate).toLong()
     }
 }
 
-internal data class Hour(val at: Long, val usage: Long, val score: Int, val deduction: Int, val bonus: Int, val updated: Long)
+internal data class Hour(val at: Long, val usage: Long, val score: Int, val deduction: Int, val bonus: Int, val updated: Long, val hasUsage: Boolean = true) {
+    val inferredHasUsage get() = usage != 0L || deduction != 0
+}
 internal data class Entry(val at: Long, val pkg: String, val duration: Long, val timestamp: Long, val screen: Boolean)
 internal data class Event(val type: Int, val pkg: String, val timestamp: Long)
 internal data class Replay(val usage: Map<Long, Long>, val entries: List<Entry>)
@@ -132,15 +180,16 @@ internal fun replay(start: Long, end: Long, events: Sequence<Event>): Replay {
     fun desktop(pkg: String) = pkg.contains("launcher", true) || pkg.contains("桌面") || pkg.contains("systemui", true)
     fun close(pkg: String, a: Long, b: Long) {
         if (b <= a || desktop(pkg)) return
-        repeat(24) { i ->
-            val hour = start + i * HOUR
+        var hour = hourStart(a)
+        while (hour < b) {
+            val next = nextHourStart(hour)
             val left = maxOf(a, hour)
-            val duration = minOf(b, hour + HOUR) - left
+            val duration = minOf(b, next) - left
             if (duration > 0) {
-                val key = hour / HOUR
-                usage[key] = (usage[key] ?: 0L) + duration
+                usage[hour] = (usage[hour] ?: 0L) + duration
                 entries += Entry(hour, pkg, duration, left, false)
             }
+            hour = next
         }
     }
     for (event in events) {
@@ -160,7 +209,7 @@ internal fun replay(start: Long, end: Long, events: Sequence<Event>): Replay {
                         }
                     }
                 }
-                entries += Entry(ts / HOUR * HOUR, if (type == 16) "屏幕锁定" else "屏幕解锁", ts, ts, true)
+                entries += Entry(hourStart(ts), if (type == 16) "屏幕锁定" else "屏幕解锁", ts, ts, true)
             }
         }
     }
@@ -172,38 +221,34 @@ internal data class Daily(val date: String, val score: Long, val deduction: Long
     val net get() = score - deduction + bonus
 }
 internal data class Cycle(val index: Int, val days: List<Daily>) {
+    val recentDays get() = days.asReversed()
     val min get() = days.sumOf { it.min }
     val max get() = days.sumOf { it.max }
     val net get() = days.sumOf { it.net }
     val bonus get() = days.sumOf { it.bonus }
     fun percent(value: Long = net) = if (max <= min) 0 else (((value - min).toFloat() / (max - min)) * 200 - 100).toInt()
+    fun notStarted(today: String, scoringStarted: Boolean) = days.singleOrNull()?.date == today && !scoringStarted
 }
 internal fun cycles(rows: List<Hour>, config: Config, ms: Long): List<Cycle> {
-    val ordered = rows.sortedBy(Hour::at)
-    val dates = ordered.mapTo(sortedSetOf()) { config.date(it.at) }
     val today = config.date(ms)
-    val minimum = config.fullMin.toLong()
-    val fullMaximum = config.fullMax.toLong()
-    val currentMaximum = config.todayMax(ms).toLong()
-    val days = dates.mapNotNull { date ->
-        val start = runCatching { dateStart(date, config.dayStart) }.getOrNull() ?: return@mapNotNull null
-        val index = ordered.binarySearchBy(start) { it.at }.let { if (it < 0) -it - 1 else it }
-        val hours = ordered.subList(index, ordered.size).takeWhile { it.at < start + DAY }
-        if (hours.isEmpty()) return@mapNotNull null
+    val days = rows.groupBy { config.date(it.at) }.toSortedMap()
+        .filterValues { hours -> hours.any { it.hasUsage || it.bonus != 0 } }
+        .map { (date, hours) ->
+        val (minimum, maximum) = config.range(date, ms.takeIf { date == today })
         Daily(date, hours.sumOf { it.score.toLong() }, hours.sumOf { it.deduction.toLong() }, hours.sumOf { it.bonus.toLong() },
-            minimum, if (date == today) currentMaximum else fullMaximum)
+            minimum, maximum)
     }
     val result = mutableListOf<Cycle>()
     val pending = mutableListOf<Daily>()
-    var previous: Long? = null
+    var previous: String? = null
+    val length = config.number("cycleLengthDays")
     for (day in days) {
-        val midnight = dateStart(day.date)
-        if (pending.isNotEmpty() && (pending.size == config.number("cycleLengthDays") || (midnight - previous!!) / DAY > 1)) {
+        if (previous != null && (pending.size == length || day.date != nextDate(previous))) {
             result += Cycle(result.size, pending.toList())
             pending.clear()
         }
         pending += day
-        previous = midnight
+        previous = day.date
     }
     if (pending.isNotEmpty()) result += Cycle(result.size, pending.toList())
     return result

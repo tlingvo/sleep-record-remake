@@ -3,10 +3,14 @@ package sleep.record
 import android.animation.ValueAnimator
 import android.app.Dialog
 import android.content.Context
+import android.os.Build
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Bitmap
+import android.graphics.RenderEffect
 import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.drawable.ColorDrawable
 import android.text.TextUtils
 import android.view.Gravity
@@ -22,6 +26,7 @@ import android.widget.ScrollView
 
 internal fun MainActivity.navigation(previous: NavDock? = null) = NavDock(this, previous?.index ?: tab, tab)
 internal class NavDock(private val a: MainActivity, private val from: Int, val index: Int) : FrameLayout(a) {
+    private val backdrop: BackdropBlurView
     private val indicator = View(a).apply {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         background = a.shape(a.palette.raised, 16, a.palette.stroke)
@@ -29,7 +34,11 @@ internal class NavDock(private val a: MainActivity, private val from: Int, val i
     private var laidOut = false
     init {
         val gap = a.dp(13)
-        val frame = FrameLayout(a).apply { background = a.shape(a.palette.surface, 24, a.palette.stroke) }
+        val frame = FrameLayout(a).apply {
+            backdrop = BackdropBlurView(a, a.navBackdropSource)
+            addView(backdrop, LayoutParams(-1, -1))
+            foreground = a.shape(Color.TRANSPARENT, 24, a.palette.stroke)
+        }
         addView(frame, LayoutParams(-1, a.dp(66)).apply { setMargins(gap, a.dp(5), gap, a.dp(8)) })
         frame.addView(indicator, LayoutParams(a.dp(52), a.dp(29), Gravity.TOP or Gravity.START).apply { topMargin = a.dp(8) })
         val line = a.row()
@@ -58,9 +67,57 @@ internal class NavDock(private val a: MainActivity, private val from: Int, val i
             }
         }
     }
+
+    fun refreshBackdrop() {
+        backdrop.invalidate()
+        invalidate()
+    }
 }
 
-internal enum class Glyph { DOWN, BACK, CLOSE, MENU, CHECK, MORE }
+private class BackdropBlurView(context: Context, private val source: View) : View(context) {
+    private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        if (Build.VERSION.SDK_INT >= 31) setRenderEffect(RenderEffect.createBlurEffect(4.5f, 4.5f, Shader.TileMode.CLAMP))
+    }
+    private var snapshot: Bitmap? = null
+    private val sampling = .25f
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        snapshot = null
+        postInvalidateOnAnimation()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        if (Build.VERSION.SDK_INT < 31) {
+            canvas.drawColor(Color.argb(22, 155, 170, 220))
+            return
+        }
+        val bitmapWidth = (width * sampling).toInt().coerceAtLeast(1)
+        val bitmapHeight = (height * sampling).toInt().coerceAtLeast(1)
+        val bitmap = snapshot?.takeIf { it.width == bitmapWidth && it.height == bitmapHeight }
+            ?: Bitmap.createBitmap(bitmapWidth, bitmapHeight, Bitmap.Config.ARGB_8888).also { snapshot = it }
+        bitmap.eraseColor(Color.TRANSPARENT)
+        val sourcePosition = IntArray(2).also(source::getLocationOnScreen)
+        val glassPosition = IntArray(2).also(::getLocationOnScreen)
+        val capture = Canvas(bitmap).apply {
+            scale(sampling, sampling)
+            translate((glassPosition[0] - sourcePosition[0]) * -1f, (glassPosition[1] - sourcePosition[1]) * -1f)
+        }
+        source.draw(capture)
+        val radius = context.resources.displayMetrics.density * 24f
+        val clip = android.graphics.Path().apply {
+            addRoundRect(RectF(0f, 0f, this@BackdropBlurView.width.toFloat(), this@BackdropBlurView.height.toFloat()),
+                radius, radius, android.graphics.Path.Direction.CW)
+        }
+        canvas.save()
+        canvas.clipPath(clip)
+        canvas.drawBitmap(bitmap, null, RectF(0f, 0f, width.toFloat(), height.toFloat()), bitmapPaint)
+        canvas.restore()
+    }
+}
+
+internal enum class Glyph { DOWN, BACK, CLOSE, MENU, CHECK, MORE, INFO, REFRESH, SEND }
 internal class GlyphView(context: Context, private val glyph: Glyph, private val tint: Int) : View(context) {
     private val ink = Paint(Paint.ANTI_ALIAS_FLAG)
     override fun onDraw(c: Canvas) {
@@ -77,6 +134,24 @@ internal class GlyphView(context: Context, private val glyph: Glyph, private val
             Glyph.MENU -> { l(-6.5f, -5f, 6.5f, -5f); l(-6.5f, 0f, 6.5f, 0f); l(-6.5f, 5f, 3f, 5f) }
             Glyph.CHECK -> { l(-5f, 0f, -1.5f, 3.5f); l(-1.5f, 3.5f, 5f, -3f) }
             Glyph.MORE -> for (x in listOf(-5f, 0f, 5f)) c.drawCircle(x, 0f, 1.15f, ink)
+            Glyph.INFO -> {
+                c.drawCircle(0f, 0f, 7f, ink)
+                ink.style = Paint.Style.FILL
+                c.drawCircle(0f, -3.3f, 1f, ink)
+                c.drawRoundRect(-1f, -1f, 1f, 4.5f, 1f, 1f, ink)
+                ink.style = Paint.Style.STROKE
+            }
+            Glyph.REFRESH -> {
+                c.drawArc(-6.2f, -6.2f, 6.2f, 6.2f, -42f, 286f, false, ink)
+                l(5.2f, -5.4f, 5.2f, -1.7f); l(5.2f, -5.4f, 1.5f, -5.4f)
+            }
+            Glyph.SEND -> {
+                val path = android.graphics.Path().apply {
+                    moveTo(-7f, 0f); lineTo(7f, -6f); lineTo(3f, 7f); lineTo(0f, 1f); close()
+                    moveTo(0f, 1f); lineTo(7f, -6f)
+                }
+                c.drawPath(path, ink)
+            }
         }
         c.restore()
     }
@@ -186,7 +261,8 @@ internal fun MainActivity.selector(parent: LinearLayout, label: String, current:
     }
     parent.addView(item, LinearLayout.LayoutParams(-1, -2))
 }
-internal fun MainActivity.popup(anchor: View, choices: List<String>, selected: Int = -1, onDismiss: () -> Unit = {}, onPick: (Int) -> Unit) {
+internal fun MainActivity.popup(anchor: View, choices: List<String>, selected: Int = -1,
+                                dangerIndices: Set<Int> = emptySet(), onDismiss: () -> Unit = {}, onPick: (Int) -> Unit) {
     if (!anchor.isAttachedToWindow || choices.isEmpty()) return
     val content = vertical().apply { background = shape(palette.surface, 20, palette.stroke); setPadding(dp(5), dp(5), dp(5), dp(5)) }
     val popup = PopupWindow(content, maxOf(anchor.width, dp(182)).coerceAtMost(root.width.coerceAtLeast(dp(182))), -2, true)
@@ -202,7 +278,8 @@ internal fun MainActivity.popup(anchor: View, choices: List<String>, selected: I
     content.addView(scroll, LinearLayout.LayoutParams(-1, if (choices.size > 6) dp(270) else -2))
     choices.forEachIndexed { i, title ->
         val line = row().apply { setPadding(dp(12), dp(5), dp(9), dp(5)); minimumHeight = dp(45); isSelected = i == selected }
-        line.addView(text(title, 14, if (i == selected) palette.accent else palette.text, i == selected), LinearLayout.LayoutParams(0, -2, 1f))
+        val tint = when { i in dangerIndices -> palette.red; i == selected -> palette.accent; else -> palette.text }
+        line.addView(text(title, 14, tint, i == selected || i in dangerIndices), LinearLayout.LayoutParams(0, -2, 1f))
         if (i == selected) line.addView(GlyphView(this, Glyph.CHECK, palette.accent), LinearLayout.LayoutParams(dp(24), dp(24)))
         clickable(line, if (i == selected) palette.raised else Color.TRANSPARENT, 12) { popup.dismiss(); onPick(i) }
         list.addView(line, LinearLayout.LayoutParams(-1, -2))

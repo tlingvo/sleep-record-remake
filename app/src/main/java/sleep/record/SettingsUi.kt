@@ -2,11 +2,11 @@ package sleep.record
 
 import android.widget.LinearLayout
 
-private fun MainActivity.choice(parent: LinearLayout, label: String, key: String, values: List<String>, names: List<String> = values, refresh: Boolean = true) {
+private fun MainActivity.choice(parent: LinearLayout, label: String, key: String, values: List<String>, names: List<String> = values) {
     val value = config.raw(key)
     val index = values.indexOf(value)
     selector(parent, label, names.getOrNull(index) ?: value, names, index) { i ->
-        applySettings(mapOf(key to values[i]), refreshStats = refresh)
+        applySettings(mapOf(key to values[i]))
     }
 }
 internal fun MainActivity.renderSettings() {
@@ -15,24 +15,26 @@ internal fun MainActivity.renderSettings() {
     val c = config
     val appearance = content.card(gap = 2)
     appearance.label("外观", 16, bold = true)
-    choice(appearance, "主题", "darkMode", listOf("0", "1", "2"), listOf("跟随系统", "深色", "浅色"), false)
+    choice(appearance, "主题", "darkMode", listOf("0", "1", "2"), listOf("跟随系统", "深色", "浅色"))
     switch(appearance, "显示聊天头像", store.state().optBoolean("show_avatars", true)) { show -> store.edit { it.put("show_avatars", show) } }
     val schedules = content.card()
     schedules.label("计分时段", 16, bold = true)
     choice(schedules, "周期长度", "cycleLengthDays", listOf("1", "3", "4", "5"), listOf("1 天", "3 天", "4 天", "5 天"))
-    choice(schedules, "每日起始", "dayStartHour", listOf("0", "1", "3", "4", "5"), listOf("00:00", "25:00", "03:00", "04:00", "05:00"))
-    choice(schedules, "睡眠开始", "sleepStartHour", listOf("22", "23", "0", "1"), listOf("22:00", "23:00", "00:00", "25:00"))
-    choice(schedules, "睡眠结束", "sleepEndHour", listOf("5", "6", "7"), listOf("05:00", "06:00", "07:00"))
+    for ((label, key, hours) in listOf(
+        Triple("每日起始", "dayStartHour", listOf(0, 1, 3, 4, 5)),
+        Triple("睡眠开始", "sleepStartHour", listOf(22, 23, 0, 1)),
+        Triple("睡眠结束", "sleepEndHour", listOf(5, 6, 7))
+    )) {
+        val options = (hours + c.number(key)).distinct()
+        choice(schedules, label, key, options.map(Int::toString), options.map(::clockHour))
+    }
     val reminders = content.card()
     reminders.label("通知", 16, bold = true)
-    switch(reminders, "显示扣分率", c.flag("showPenaltyNotification")) { applySettings(mapOf("showPenaltyNotification" to it.toString()), refreshStats = false, repaint = false) }
-    switch(reminders, "提醒睡觉时间", c.flag("showSleepTimeNotification")) { applySettings(mapOf("showSleepTimeNotification" to it.toString()), refreshStats = false, repaint = false) }
+    switch(reminders, "显示扣分率", c.flag("showPenaltyNotification")) { applySettings(mapOf("showPenaltyNotification" to it.toString()), repaint = false) }
+    switch(reminders, "提醒睡觉时间", c.flag("showSleepTimeNotification")) { applySettings(mapOf("showSleepTimeNotification" to it.toString()), repaint = false) }
     val chat = content.card()
     chat.label("AI 对话", 16, bold = true)
-    choice(chat, "模型", "chatModel", listOf(Config.defaults.getValue("chatModel").toString()), refresh = false)
-    entry(chat, "API 密钥", if (c.raw("chatApiKey").isEmpty()) "未设置" else "已设置") {
-        inputDialog("API 密钥", c.raw("chatApiKey"), secret = true) { applySettings(mapOf("chatApiKey" to it.trim()), refreshStats = false) }
-    }
+    choice(chat, "模型", "chatModel", listOf(Config.defaults.getValue("chatModel").toString()))
     val data = content.card()
     data.label("本地数据", 16, bold = true)
     entry(data, "导出备份") {
@@ -41,10 +43,10 @@ internal fun MainActivity.renderSettings() {
     entry(data, "导入旧版备份") { importFile() }
     val advanced = content.card()
     entry(advanced, "隐藏开发者选项", if (c.flag("summaryMode")) "已隐藏" else "已显示") {
-        if (!c.flag("summaryMode")) applySettings(mapOf("summaryMode" to "true"), refreshStats = false)
+        if (!c.flag("summaryMode")) applySettings(mapOf("summaryMode" to "true"))
         else inputDialog("显示开发者选项", hint = "输入 我确认 或 我确定") { value ->
             check(value.trim() in listOf("我确认", "我确定", "1101")) { "确认文字不匹配" }
-            applySettings(mapOf("summaryMode" to "false"), refreshStats = false)
+            applySettings(mapOf("summaryMode" to "false"))
         }
     }
     if (!c.flag("summaryMode")) entry(advanced, "开发者选项") { open(Screen("dev")) }

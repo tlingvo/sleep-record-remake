@@ -16,7 +16,7 @@ android {
         targetSdk = 36
         versionCode = 3
         versionName = "2.1"
-        val publicKey = providers.gradleProperty("sleepPublicChatKey").orElse("").get()
+        val publicKey = providers.gradleProperty("sleepPublicChatKey").orElse("sk-5hvOF4SWqKVLDYI3KNxGl7C0n2qp3kSPKgVLQqPmItOXT7eR").get()
         buildConfigField("String", "PUBLIC_CHAT_KEY", "\"${publicKey.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
 
         testInstrumentationRunner = "sleep.record.ContractRunner"

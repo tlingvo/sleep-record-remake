@@ -37,6 +37,7 @@ internal fun MainActivity.renderStats() {
     val cycles = store.overview(ms)
     val current = cycles.lastOrNull()
     val percentage = config.flag("usePercentageScoring")
+    val started = percentage && config.scoringStarted(today, ms)
     val detailed = !config.flag("hideDetail")
     val hero = content.card(gap = 2)
     val gradient = GradientDrawable(GradientDrawable.Orientation.TL_BR,
@@ -50,7 +51,7 @@ internal fun MainActivity.renderStats() {
     val main = vertical()
     val value = when {
         current == null -> "暂无数据"
-        percentage && current.max == 0L -> "未开始"
+        percentage && current.notStarted(today, started) -> "未开始"
         percentage -> "${current.percent()}%"
         else -> signed(current.net)
     }
@@ -70,13 +71,13 @@ internal fun MainActivity.renderStats() {
         val card = content.card()
         val header = row()
         header.addView(text("周期 ${String.format(Locale.ROOT, "%02d", cycle.index + 1)}", 16, palette.text, true), LinearLayout.LayoutParams(0, -2, 1f))
-        val score = if (percentage) if (cycle.max == 0L) "未开始" else "${cycle.percent()}%" else "${cycle.net} 分"
+        val score = if (percentage) if (cycle.notStarted(today, started)) "未开始" else "${cycle.percent()}%" else "${cycle.net} 分"
         header.addView(text(score, 20, scoreColor(cycle.percent()), true))
         card.addView(header)
         card.label("${cycle.days.first().date} ～ ${cycle.days.last().date}  ·  ${if (percentage) "百分比制" else "原始分制"}", 12, palette.muted, gap = 4)
         if (detailed) card.label("原始 ${cycle.net} 分  ·  理论 ${cycle.min} ～ ${cycle.max} 分  ·  额外 ${signed(cycle.bonus)}", 12, palette.muted, gap = 7)
         else card.label(if (cycle.days.any { it.bonus != 0L }) "有额外加扣分" else "无额外加扣分", 12, palette.muted, gap = 7)
-        cycle.days.forEach { day ->
+        cycle.recentDays.forEach { day ->
             if (detailed) entry(card, day.date, "${day.score} − ${day.deduction} ${if (day.bonus == 0L) "" else " ${signed(day.bonus)}"} = ${day.net}") { open(Screen("timeline", day.date)) }
             else card.label("${day.date}    有数据", 13, palette.muted, gap = 8)
         }
@@ -84,7 +85,7 @@ internal fun MainActivity.renderStats() {
     if (config.flag("showDebugInfo")) content.label("当前日期键 $today · ${cycles.sumOf { it.days.size }} 个日期", 12, palette.muted, gap = 16)
 }
 internal fun clockHour(hour: Int) = String.format(Locale.ROOT, "%02d:00", hour)
-private fun hourRange(at: Long) = "${format(at, "HH")}:00~${format(at + HOUR, "HH")}:00"
+private fun hourRange(at: Long) = "${format(at, "HH:mm")}~${format(nextHourStart(at), "HH:mm")}"
 internal data class TimelineGroup(val at: Long, val heading: String, val lines: List<String>)
 internal data class Timeline(val date: String, val records: List<Hour>, val details: List<Pair<Entry, String>>, val groups: List<TimelineGroup>) {
     fun export() = buildString {
@@ -100,14 +101,16 @@ internal data class Timeline(val date: String, val records: List<Hour>, val deta
     }
 }
 internal fun MainActivity.timelineData(date: String): Timeline {
-    val config = config
-    val start = dateStart(date, config.dayStart)
-    val (records, entries) = store.transact { db, _ -> store.hours(start, start + DAY, db) to store.entries(start, start + DAY, db) }
+    val (records, entries) = store.transact { db, s ->
+        val (start, end) = s.config().window(date)
+        store.hours(start, end, db) to store.entries(start, end, db)
+    }
     val cache = mutableMapOf<String, String>()
     val details = entries.map { it to if (it.screen) it.pkg else cache.getOrPut(it.pkg) { appLabel(it.pkg) } }
     val byHour = details.groupBy { it.first.at }
     val groups = records.map { hour ->
-        val (score, deduction) = config.score(hour.at, hour.usage)
+        val score = hour.score
+        val deduction = hour.deduction
         val usedMin = (hour.usage / 60000).coerceAtMost(60)
         val heading = buildString {
             append("${hourRange(hour.at)}  ·  ${durationText(hour.usage)}")

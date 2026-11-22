@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.View
 import android.view.WindowInsets
@@ -30,7 +31,7 @@ class MainActivity : Activity() {
     internal val player by lazy { PlayerUi(this) }
     internal val handler = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
-    internal lateinit var root: LinearLayout
+    internal lateinit var root: FrameLayout
     internal lateinit var body: LinearLayout
     internal lateinit var palette: Palette
     private lateinit var shell: FrameLayout
@@ -60,6 +61,14 @@ class MainActivity : Activity() {
     internal var restResult: Rest? = null
     internal var renderTick: Runnable? = null
     internal var refreshing = false
+    private var restLockRequested = false
+    private var navBackdropUntil = 0L
+    private val navBackdropPulse = object : Runnable {
+        override fun run() {
+            invalidateNavBackdrop()
+            if (SystemClock.uptimeMillis() < navBackdropUntil) handler.postDelayed(this, 16)
+        }
+    }
     private var permitted = false
     private var permissionAsked = false
     private var checkedUsage = false
@@ -84,6 +93,10 @@ class MainActivity : Activity() {
             screen = Screen("question", "用户须知main")
             notice = true
         }
+        if (!notice) tasks.rest()?.takeIf { it.end > now() }?.let {
+            rest = it.copy(seconds = ((it.end - now() + 999) / 1000).coerceAtLeast(0))
+            screen = Screen("rest")
+        }
         render()
     }
     override fun onSaveInstanceState(outState: Bundle) {
@@ -93,6 +106,15 @@ class MainActivity : Activity() {
         super.onSaveInstanceState(outState)
     }
     private fun activeType() = overlayPage?.type ?: screen?.type
+    private fun restRunning() = tasks.rest()?.end?.let { it > now() } == true
+    internal fun syncRestLockTask() {
+        if (restRunning()) {
+            if (!restLockRequested) runCatching { startLockTask(); restLockRequested = true }
+        } else if (restLockRequested) {
+            runCatching { stopLockTask() }
+            restLockRequested = false
+        }
+    }
     override fun onResume() {
         super.onResume()
         val previous = permitted
@@ -100,6 +122,7 @@ class MainActivity : Activity() {
         val returned = !checkedUsage || previous != permitted
         checkedUsage = true
         if (returned) render()
+        syncRestLockTask()
         enterReadyState(returned)
         if (activeType() in listOf("rest", "player")) renderScene()
     }
@@ -125,6 +148,14 @@ class MainActivity : Activity() {
         chat.cancel()
         super.onStop()
     }
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (restRunning() && !isFinishing) handler.post {
+            if (restRunning() && !isFinishing && !isDestroyed) {
+                startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+            }
+        }
+    }
     override fun onDestroy() {
         chat.cancel()
         player.release()
@@ -141,6 +172,7 @@ class MainActivity : Activity() {
 
     private val sheets = setOf("chat-drawer", "chat-settings", "avatar", "audio", "player", "dev", "details")
     internal fun open(next: Screen) {
+        if (restRunning()) { toast("休息计时结束前请留在此页面，可以关闭屏幕"); return }
         hideKeyboard()
         if (next.type in sheets) {
             val previous = overlayPage
@@ -167,6 +199,7 @@ class MainActivity : Activity() {
         floating.hide(animate)
     }
     internal fun closePage() {
+        if (screen?.type == "rest" && restRunning()) { toast("休息计时结束前请留在此页面，可以关闭屏幕"); return }
         hideKeyboard()
         if (overlayPage != null) {
             val closing = activeType()
@@ -189,6 +222,7 @@ class MainActivity : Activity() {
         renderScene(Motion.POP) { enterReadyState(startService = !wasReady) }
     }
     internal fun selectTab(index: Int) {
+        if (restRunning()) { toast("休息计时结束前请留在此页面，可以关闭屏幕"); return }
         if (index !in 0..3) return
         hideKeyboard()
         val previous = tab
@@ -235,6 +269,7 @@ class MainActivity : Activity() {
     }
     @Deprecated("Used for compatibility with the in-app page stack")
     override fun onBackPressed() {
+        if (restRunning()) { toast("休息计时结束前请留在此页面，可以关闭屏幕"); return }
         if (overlayPage != null) { closePage(); return }
         if (screen?.type == "question") return
         if (screen != null) closePage() else if (tab != 0) selectTab(0) else super.onBackPressed()
@@ -245,10 +280,10 @@ class MainActivity : Activity() {
 
     private fun mount() {
         shell = FrameLayout(this)
-        root = vertical().apply { isFocusableInTouchMode = true }
+        root = FrameLayout(this).apply { isFocusableInTouchMode = true }
         shell.addView(root, FrameLayout.LayoutParams(-1, -1))
         scene = SceneHost(this)
-        root.addView(scene, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(scene, FrameLayout.LayoutParams(-1, -1))
         floating = OverlayHost(this)
         shell.addView(floating, FrameLayout.LayoutParams(-1, -1))
         setContentView(shell)
@@ -259,13 +294,22 @@ class MainActivity : Activity() {
                 keyboardVisible = insets.isVisible(WindowInsets.Type.ime())
                 updateNavVisibility()
                 view.setPadding(safe.left, safe.top, safe.right, maxOf(ime.bottom, safe.bottom))
+                refreshNavBackdropDuring(180)
                 insets
             }
             shell.requestApplyInsets()
         }
     }
     private fun updateNavVisibility() {
-        navView?.visibility = if (screen == null && ready() && !keyboardVisible) View.VISIBLE else View.GONE
+        navView?.visibility = if (screen == null && ready()) View.VISIBLE else View.GONE
+    }
+    internal fun chatComposerBottomInset() = dp(82)
+    internal val navBackdropSource: View get() = scene
+    internal fun invalidateNavBackdrop() { (navView as? NavDock)?.refreshBackdrop() }
+    internal fun refreshNavBackdropDuring(durationMs: Long = 420) {
+        navBackdropUntil = SystemClock.uptimeMillis() + durationMs
+        handler.removeCallbacks(navBackdropPulse)
+        navBackdropPulse.run()
     }
     internal fun repaintChat() = renderScene()
     internal fun render() = if (overlayPage == null) renderScene() else renderOverlay()
@@ -307,13 +351,14 @@ class MainActivity : Activity() {
         }
         lastScroll?.let { scroll -> scrollOffsets[renderedKey]?.let { y -> scroll.post { scroll.scrollTo(0, y) } } }
         scene.show(body, motion, after)
+        handler.postDelayed({ invalidateNavBackdrop() }, if (motion == Motion.NONE) 40L else 380L)
         if (ready() && page == null && navSignature != (tab to palette)) {
             val previous = navView
             val next = navigation(previous as? NavDock)
-            previous?.let(root::removeView)
+            previous?.let(shell::removeView)
             navView = next
             navSignature = tab to palette
-            root.addView(next)
+            shell.addView(next, 1, FrameLayout.LayoutParams(-1, dp(79), android.view.Gravity.BOTTOM))
         }
         updateNavVisibility()
         if (overlayPage != null) {
@@ -378,13 +423,13 @@ class MainActivity : Activity() {
             if (screen == null && overlayPage == null && tab in listOf(0, 2)) renderScene()
         }
     }
-    internal fun applySettings(settings: Map<String, String>, reset: Boolean = false, refreshStats: Boolean = true, repaint: Boolean = true) {
-        store.adjustSettings(settings, reset)
+    internal fun applySettings(settings: Map<String, String>, reset: Boolean = false, repaint: Boolean = true) {
+        val backfill = store.adjustSettings(settings, reset)
         val invalid = config.invalidKeys()
         if (invalid.isNotEmpty()) toast("部分参数已使用默认值：${invalid.joinToString()}")
         SleepService.syncFromActivity(this)
         if (repaint) render()
-        if (refreshStats) refresh(true)
+        if (backfill) refresh(false)
     }
     internal fun <T> background(work: () -> T, complete: (Result<T>) -> Unit) {
         io.execute {

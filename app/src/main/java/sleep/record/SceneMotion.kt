@@ -48,7 +48,7 @@ internal class SceneHost(private val a: MainActivity) : FrameLayout(a) {
         if (!animated) removeAllViews()
         visiblePage = next
         addView(next, LayoutParams(-1, -1))
-        if (!animated) { onSettled?.invoke(); return }
+        if (!animated) { a.invalidateNavBackdrop(); onSettled?.invoke(); return }
         old!!.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         val sign = if (motion == Motion.RIGHT || motion == Motion.POP || motion == Motion.SECTION_RIGHT) -1 else 1
         val time = when (motion) { Motion.QUIZ -> 245L; Motion.SECTION_LEFT, Motion.SECTION_RIGHT -> 235L; else -> 335L }
@@ -67,10 +67,12 @@ internal class SceneHost(private val a: MainActivity) : FrameLayout(a) {
         next.translationY = if (motion == Motion.QUIZ) a.dp(14).toFloat() else 0f
         next.alpha = if (motion == Motion.LEFT || motion == Motion.RIGHT) 1f else .06f
         moving = true
-        next.animate().translationX(0f).translationY(0f).alpha(1f).setDuration(time).setInterpolator(settle).withEndAction {
+        next.animate().translationX(0f).translationY(0f).alpha(1f).setDuration(time).setInterpolator(settle)
+            .setUpdateListener { a.invalidateNavBackdrop() }.withEndAction {
             if (id == transitionId) {
                 removeView(old)
                 moving = false
+                a.invalidateNavBackdrop()
                 onSettled?.invoke()
             }
         }.start()
@@ -85,8 +87,8 @@ internal class SceneHost(private val a: MainActivity) : FrameLayout(a) {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 startX = e.x; startY = e.y; tracking = true; dragging = false
-                edge = a.tab == 1 && e.x < a.dp(28)
-                blocked = a.tab == 1 && !edge && hitHorizontalChild(this, e.rawX, e.rawY)
+                edge = a.tab == 1
+                blocked = a.tab == 1 && hitHorizontalChild(this, e.rawX, e.rawY)
             }
             MotionEvent.ACTION_MOVE -> if (tracking && !blocked) {
                 val dx = e.x - startX; val dy = e.y - startY
@@ -106,7 +108,10 @@ internal class SceneHost(private val a: MainActivity) : FrameLayout(a) {
         if (!dragging) return super.onTouchEvent(e)
         val dx = e.x - startX
         when (e.actionMasked) {
-            MotionEvent.ACTION_MOVE -> visiblePage?.translationX = if (a.motionEnabled()) (dx * .28f).coerceIn(-a.dp(52).toFloat(), a.dp(52).toFloat()) else 0f
+            MotionEvent.ACTION_MOVE -> {
+                visiblePage?.translationX = if (a.motionEnabled()) (dx * .28f).coerceIn(-a.dp(52).toFloat(), a.dp(52).toFloat()) else 0f
+                a.invalidateNavBackdrop()
+            }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 dragging = false; tracking = false
                 if (e.actionMasked == MotionEvent.ACTION_UP && abs(dx) > min(a.dp(78).toFloat(), width * .19f) && canSlide(dx)) {
@@ -184,6 +189,9 @@ internal class OverlayHost(private val a: MainActivity) : FrameLayout(a) {
         }
         active.removeAllViews()
         active.addView(view, LayoutParams(-1, -1))
+        if (!side) active.layoutParams = (active.layoutParams as LayoutParams).apply {
+            height = sheetHeight(a.root.height.takeIf { it > 0 } ?: a.resources.displayMetrics.heightPixels)
+        }
         if (!side && changeShell.not() && oldType != page.type && a.motionEnabled()) {
             view.translationY = a.dp(12).toFloat(); view.alpha = 0f
             view.animate().translationY(0f).alpha(1f).setDuration(230).setInterpolator(settle).start()
@@ -191,7 +199,11 @@ internal class OverlayHost(private val a: MainActivity) : FrameLayout(a) {
         a.root.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         if (fresh) post { if (sequence == id) active.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) }
     }
-    private fun sheetHeight(available: Int): Int = if (a.keyboardVisible) available else min(available * 86 / 100, a.dp(690))
+    private fun sheetHeight(available: Int): Int = when {
+        a.keyboardVisible -> available
+        variant == "chat-settings" -> available * 96 / 100
+        else -> min(available * 86 / 100, a.dp(690))
+    }
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         if (w <= 0 || h <= 0) return

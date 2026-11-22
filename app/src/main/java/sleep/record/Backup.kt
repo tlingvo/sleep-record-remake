@@ -10,7 +10,7 @@ internal object Backup {
     private val sections = linkedMapOf(
         "chatData" to linkedMapOf("conversations" to JSONArray(), "chat_day_key" to "", "chat_day_chars" to 0),
         "challengeData" to linkedMapOf("tasks" to JSONArray()),
-        "checkinData" to linkedMapOf("last_checkin_date" to "", "streak_days" to 0),
+        "checkinData" to linkedMapOf("last_checkin_date" to "", "streak_days" to 0, "last_checkin_time" to 0L),
         "oneTimeData" to linkedMapOf("completed_tasks" to JSONArray()),
         "appData" to linkedMapOf("notice_shown" to false)
     )
@@ -108,13 +108,18 @@ internal object Backup {
     fun import(store: Store, text: String, ms: Long = now()) {
         val root = parse(text, "备份") as? JSONObject ?: error("备份根节点应为对象")
         val settings = field(root, "settings", "备份", JSONObject())
-        val hourRows = rows(field(root, "hourlyRecords", "备份", JSONArray()), "hourlyRecords").map { (r, p) ->
-            Hour(field(r, "hourStartMs", p), nonnegative(field(r, "totalUsageMs", p), "$p.totalUsageMs"), integer(r, "score", p),
+        val parsedHours = rows(field(root, "hourlyRecords", "备份", JSONArray()), "hourlyRecords").map { (r, p) ->
+            val hour = Hour(field(r, "hourStartMs", p), nonnegative(field(r, "totalUsageMs", p), "$p.totalUsageMs"), integer(r, "score", p),
                 nonnegative(integer(r, "deduction", p).toLong(), "$p.deduction").toInt(), integer(r, "bonusScore", p), field(r, "lastUpdated", p, ms))
+            Triple(r, p, hour)
         }
         val entries = rows(field(root, "appUsageEntries", "备份", JSONArray()), "appUsageEntries").map { (r, p) ->
             Entry(field(r, "hourStartMs", p), field(r, "packageName", p, ""), field(r, "totalTimeMs", p),
                 field(r, "lastEventTime", p, 0L), field(r, "isScreenEvent", p, false))
+        }
+        val observed = entries.mapTo(hashSetOf(), Entry::at)
+        val hourRows = parsedHours.map { (r, p, hour) ->
+            hour.copy(hasUsage = field(r, "hasUsage", p, hour.inferredHasUsage || hour.at in observed))
         }
         val replacement = JSONObject()
         for ((section, keys) in sections) {
@@ -130,6 +135,7 @@ internal object Backup {
                     }
                     is String -> field(content, key, section, default)
                     is Int -> integer(content, key, section, default)
+                    is Long -> nonnegative(field(content, key, section, default), path)
                     is Boolean -> field(content, key, section, default)
                     else -> error("未知的段 $section")
                 }
@@ -137,9 +143,10 @@ internal object Backup {
             }
         }
         store.transact { db, s ->
+            // Re-score retained local rows; imported rows keep the scores supplied by the backup.
+            if (settings.length() != 0) store.setSettings(db, s, Config(settings).export())
             hourRows.forEach { store.put(db, it) }
             entries.forEach { store.put(db, it) }
-            if (settings.length() != 0) s.put("settings", Config(settings).export())
             replacement.keys().forEach { s.put(it, replacement.get(it)) }
             store.invalidate(s)
             s.remove("last_refresh_time")
@@ -152,6 +159,7 @@ internal object Backup {
             "hourlyRecords" to JSONArray(store.hours(db = db).map {
                 json("hourStartMs" to it.at, "totalUsageMs" to it.usage, "score" to it.score, "deduction" to it.deduction,
                     "bonusScore" to it.bonus, "lastUpdated" to it.updated)
+                    .apply { if (it.hasUsage != it.inferredHasUsage) put("hasUsage", it.hasUsage) }
             }), "appUsageEntries" to JSONArray(store.entries(db = db).map {
                 json("hourStartMs" to it.at, "packageName" to it.pkg, "totalTimeMs" to it.duration,
                     "lastEventTime" to it.timestamp, "isScreenEvent" to it.screen)
@@ -159,6 +167,11 @@ internal object Backup {
         sections.forEach { (section, keys) ->
             root.put(section, JSONObject().apply {
                 keys.forEach { (key, fallback) ->
+                    if (key == "last_checkin_time" && s.optLong(key) <= 0L) return@forEach
+                    if (key == "last_checkin_date") {
+                        put(key, s.customDate(s.config(), key, "last_checkin_time"))
+                        return@forEach
+                    }
                     val value = s.opt(key) ?: fallback
                     put(key, if (value is JSONArray) value.toString() else value)
                 }

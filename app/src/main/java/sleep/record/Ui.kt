@@ -93,9 +93,18 @@ internal fun MainActivity.scrollBox(parent: LinearLayout, pad: Int = 18): Pair<S
         clipToPadding = false; isFillViewport = false; isVerticalScrollBarEnabled = false
     }
     scrollTarget(scroll, parent)
-    val content = vertical().apply { setPadding(dp(pad), dp(2), dp(pad), dp(22)) }
+    val bottomSafeArea = if (parent === body && screen == null) dp(102) else dp(22)
+    val content = vertical().apply { setPadding(dp(pad), dp(2), dp(pad), bottomSafeArea) }
     scroll.addView(content, android.widget.FrameLayout.LayoutParams(-1, -2))
     parent.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+    scroll.setOnScrollChangeListener { _, _, _, _, _ -> invalidateNavBackdrop() }
+    scroll.setOnTouchListener { _, event ->
+        when (event.actionMasked) {
+            android.view.MotionEvent.ACTION_MOVE -> invalidateNavBackdrop()
+            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> refreshNavBackdropDuring()
+        }
+        false
+    }
     return scroll to content
 }
 internal fun MainActivity.title(heading: String, back: Boolean = false, subtitle: String? = null,
@@ -116,10 +125,15 @@ internal fun MainActivity.title(heading: String, back: Boolean = false, subtitle
     }
     line.addView(texts, LinearLayout.LayoutParams(0, -2, 1f))
     for ((label, fn) in actions) {
-        val isIcon = label == "选项"
-        val size = if (isIcon) dp(44) else -2
-        line.addView(if (isIcon) iconButton(Glyph.MORE, label, fn) else button(label, onClick = fn),
-            LinearLayout.LayoutParams(size, size).apply { marginStart = dp(7) })
+        val glyph = when (label) {
+            "选项" -> Glyph.MORE
+            "刷新", "刷新中" -> Glyph.REFRESH
+            "关于" -> Glyph.INFO
+            else -> null
+        }
+        val button = if (glyph != null) iconButton(glyph, label, fn) else this.button(label, onClick = fn)
+        line.addView(button, LinearLayout.LayoutParams(if (glyph != null) dp(44) else -2, if (glyph != null) dp(44) else -2)
+            .apply { marginStart = dp(7) })
     }
     body.addView(line)
 }

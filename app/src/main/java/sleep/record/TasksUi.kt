@@ -10,8 +10,8 @@ internal fun MainActivity.renderTasks() {
     val config = s.config()
     val ms = now()
     val today = config.date(ms)
-    val start = dateStart(today, config.dayStart)
-    val bonus = store.hours(start, start + DAY).sumOf { it.bonus.toLong() }
+    val (start, end) = config.window(today)
+    val bonus = store.hours(start, end).sumOf { it.bonus.toLong() }
     title("任务", subtitle = "今日加分 ${signed(bonus)}")
     val tabs = vertical().apply { setPadding(dp(18), 0, dp(18), dp(7)) }
     segments(tabs, listOf("常规", "挑战", "一次性"), taskTab) { selectTaskSection(it) }
@@ -41,10 +41,10 @@ private fun MainActivity.taskCard(parent: LinearLayout, title: String, descripti
 private fun MainActivity.regularTasks(content: LinearLayout, s: JSONObject, ms: Long) {
     val c = s.config()
     val today = c.date(ms)
-    val checkin = s.text("last_checkin_date") == today
+    val checkin = s.customDate(c, "last_checkin_date", "last_checkin_time") == today
     taskCard(content, "每日打卡", "已连续打卡 ${s.optInt("streak_days")} 天", signed(c.number("checkinBonus").toLong()))
         .action(if (checkin) "今日已打卡" else "打卡", primary = true, enabled = !checkin) { toast("已打卡 ${signed(tasks.checkin().toLong())} 分"); render() }
-    val read = s.text("daily_task_date") == today
+    val read = s.customDate(c, "daily_task_date", "daily_task_time") == today
     taskCard(content, "查看早睡建议", "打开睡眠主题视频搜索", signed(c.number("dailyTaskBonus").toLong()))
         .action(if (read) "今日已完成" else "查看建议", enabled = !read) {
             openUrl("https://bilibili.com/search?keyword=%E7%9D%A1%E8%A7%89")
@@ -86,7 +86,7 @@ private fun MainActivity.challengeTasks(content: LinearLayout, s: JSONObject) {
     for (name in listOf(EARLY, PERSUADE)) {
         val same = all.filter { it.text("name") == name }
         val active = same.any { it.text("status", "IN_PROGRESS") != "ARCHIVED" }
-        val used = name == EARLY && same.any { it.text("judgedDate") == today }
+        val used = name == EARLY && same.any { it.earlyDate(c) == today }
         val card = taskCard(content, name, if (name == EARLY) "让本自定义日的手机使用扣分低于 ${c.number("earlySleepThreshold")} 分" else "与 AI 对话，说服它允许你晚睡",
             if (name == EARLY) "+${c.number("earlySleepReward")}" else "+10")
         card.action(when {
@@ -100,7 +100,8 @@ private fun MainActivity.challengeTasks(content: LinearLayout, s: JSONObject) {
     live.forEach { task ->
         val status = task.text("status", "IN_PROGRESS")
         val isEarly = task.text("name") == EARLY
-        val desc = task.text("judgedDate").let { if (it.isBlank()) task.text("description") else "判定日期 $it" }
+        val date = if (isEarly && status == "IN_PROGRESS") task.earlyDate(c) else task.text("judgedDate")
+        val desc = if (date.isBlank()) task.text("description") else "判定日期 $date"
         taskCard(content, task.text("name"), desc, "+${task.optInt("points")}").apply {
             when (status) {
                 "IN_PROGRESS" -> action(if (isEarly) "进行中 · 查看统计" else "进行中 · 继续对话") {
@@ -231,7 +232,10 @@ private fun MainActivity.finishQuestion(name: String, node: JSONObject) {
 internal fun MainActivity.renderRest() {
     val selected = rest ?: Rest(30, 20, "last_rest_short_time")
     val current = tasks.rest()
-    if (current != null && current.end <= now()) restResult = tasks.settleRest() ?: restResult
+    if (current != null && current.end <= now()) {
+        restResult = tasks.settleRest() ?: restResult
+        syncRestLockTask()
+    }
     val display = restResult ?: tasks.rest() ?: selected
     val completed = restResult != null
     val running = !completed && display.end > 0
@@ -242,8 +246,12 @@ internal fun MainActivity.renderRest() {
     card.label(if (completed) "休息完成" else "放下手机，休息一下", 24, bold = true).gravity = Gravity.CENTER
     val timer = card.label(if (completed) "${signed(display.points.toLong())} 分" else mmss(display.seconds), 46,
         if (completed) palette.green else palette.accent, gap = 9).apply { gravity = Gravity.CENTER }
-    card.label(if (completed) "奖励已记入当前小时" else "诚信计时 · 返回后可以恢复进度", 13, palette.muted, gap = 7).gravity = Gravity.CENTER
-    if (completed) card.action("返回", true) { closePage() } else if (!running) card.action("开始计时", true) { tasks.startRest(selected); render() }
+    card.label(if (completed) "奖励已记入当前小时" else if (running) "计时中 · 可关闭屏幕" else "准备好后开始计时", 13, palette.muted, gap = 7).gravity = Gravity.CENTER
+    if (completed) card.action("返回", true) { closePage() } else if (!running) card.action("开始计时", true) {
+        rest = tasks.startRest(selected)
+        syncRestLockTask()
+        render()
+    }
     if (running) {
         val tick = object : Runnable {
             override fun run() {
@@ -251,6 +259,7 @@ internal fun MainActivity.renderRest() {
                 val remaining = display.end - now()
                 if (remaining <= 0) {
                     restResult = tasks.settleRest()
+                    syncRestLockTask()
                     render()
                     return
                 }

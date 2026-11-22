@@ -11,6 +11,10 @@ internal fun JSONObject.config() = Config(optJSONObject("settings") ?: JSONObjec
 internal fun JSONObject.list(key: String) = array(key).objects()
 internal fun JSONObject.find(key: String, id: String) = list(key).firstOrNull { it.text("id") == id }
 internal fun JSONObject.child(key: String): JSONObject = optJSONObject(key) ?: JSONObject().also { put(key, it) }
+internal fun JSONObject.customDate(config: Config, dateKey: String, timeKey: String) =
+    optLong(timeKey).takeIf { it > 0 }?.let(config::date) ?: text(dateKey)
+internal fun JSONObject.earlyDate(config: Config) =
+    if (text("judgedDate").isEmpty()) "" else customDate(config, "judgedDate", "createdAt")
 
 internal class Catalog(context: Context) {
     private val source = context.assets.open("catalog.json").bufferedReader(Charsets.UTF_8).use { JSONObject(it.readText()) }
@@ -25,20 +29,23 @@ internal class Tasks(private val store: Store, private val catalog: Catalog) {
     fun checkin(debug: Boolean = false, ms: Long = now()) = store.transact { db, s ->
         val config = s.config()
         val today = config.date(ms)
-        val last = s.text("last_checkin_date")
+        val last = s.customDate(config, "last_checkin_date", "last_checkin_time")
         check(debug || last != today) { "今天已经打卡" }
-        val consecutive = runCatching { dateStart(today) - dateStart(last) == DAY }.getOrDefault(false)
+        val consecutive = runCatching { nextDate(last) == today }.getOrDefault(false)
         s.put("last_checkin_date", today)
+        s.put("last_checkin_time", ms)
         s.put("streak_days", if (consecutive) s.optInt("streak_days") + 1 else 1)
         val points = config.number("checkinBonus")
         store.bonus(db, s, ms, points, ms)
         points
     }
     fun suggestion(ms: Long = now()) = store.transact { db, s ->
-        val today = s.config().date(ms)
-        check(s.text("daily_task_date") != today) { "今天已完成" }
+        val config = s.config()
+        val today = config.date(ms)
+        check(s.customDate(config, "daily_task_date", "daily_task_time") != today) { "今天已完成" }
         s.put("daily_task_date", today)
-        store.bonus(db, s, ms, s.config().number("dailyTaskBonus"), ms)
+        s.put("daily_task_time", ms)
+        store.bonus(db, s, ms, config.number("dailyTaskBonus"), ms)
     }
     fun count(s: JSONObject, ms: Long = now()) = if (s.text("daily_count_date") == civil(ms)) s.optInt("daily_count") else 0
     fun oneTime(id: String, points: Int, ms: Long = now()) = store.transact { db, s ->
@@ -85,9 +92,9 @@ internal class Tasks(private val store: Store, private val catalog: Catalog) {
         val task = json("id" to newId(), "name" to name, "status" to "IN_PROGRESS", "createdAt" to ms)
         val conversationId = when (name) {
             EARLY -> {
-                check(matching.none { it.text("judgedDate") == today }) { "本日挑战已接取，请等到 ${config.dayStart}:00 切日" }
-                val start = dateStart(today, config.dayStart)
-                val stored = store.hours(start, start + DAY, db).sumOf { it.deduction.toLong() }
+                check(matching.none { it.earlyDate(config) == today }) { "本日挑战已接取，请等到 ${clockHour(config.dayStart)} 切日" }
+                val (start, end) = config.window(today)
+                val stored = store.hours(start, end, db).sumOf { it.deduction.toLong() }
                 val threshold = config.number("earlySleepThreshold")
                 check(stored + config.guard(ms) < threshold) { "今日扣分已达接取阈值 $threshold" }
                 task.put("description", "在本自定义日结束前，累计手机使用扣分低于阈值")
@@ -118,11 +125,11 @@ internal class Tasks(private val store: Store, private val catalog: Catalog) {
         s.list("tasks").filter {
             it.text("name") == EARLY && it.text("status", "IN_PROGRESS") == "IN_PROGRESS" && it.text("judgedDate").isNotEmpty()
         }.forEach { task ->
-            val date = task.getString("judgedDate")
-            val start = runCatching { dateStart(date, config.dayStart) }.getOrNull() ?: return@forEach
-            val end = start + DAY
+            val date = task.earlyDate(config)
+            val (start, end) = runCatching { config.window(date) }.getOrNull() ?: return@forEach
             val failed = store.hours(start, end, db).sumOf { it.deduction.toLong() } >= config.number("earlySleepThreshold")
             if (failed || ms >= end) {
+                task.put("judgedDate", date)
                 task.put("completedAt", ms)
                 task.put("status", if (failed) "FAILED" else "COMPLETED")
                 if (failed) task.put("settledDate", date)
@@ -140,8 +147,8 @@ internal class Tasks(private val store: Store, private val catalog: Catalog) {
         points
     }
     fun reset() = store.edit { s ->
-        listOf("tasks", "completed_tasks", "daily_count_date", "daily_count", "last_checkin_date", "streak_days",
-            "last_rest_time", "last_rest_short_time", "daily_task_date", "hourly_usage").forEach(s::remove)
+        listOf("tasks", "completed_tasks", "daily_count_date", "daily_count", "last_checkin_date", "last_checkin_time", "streak_days",
+            "last_rest_time", "last_rest_short_time", "daily_task_date", "daily_task_time", "hourly_usage").forEach(s::remove)
     }
 }
 
