@@ -41,12 +41,8 @@ internal class Bridge(private val a: MainActivity) {
     @JavascriptInterface
     fun call(id: Int, method: String, args: String) {
         val input = runCatching { JSONObject(args.ifBlank { "{}" }) }.getOrDefault(JSONObject())
-        val queued = android.os.SystemClock.uptimeMillis()
         val work = Runnable {
-            val begin = android.os.SystemClock.uptimeMillis()
             val result = runCatching { dispatch(method, input) }
-            val end = android.os.SystemClock.uptimeMillis()
-            if (BuildConfig.DEBUG && end - queued > 80) android.util.Log.i("SleepLaunch", "call $method waited ${begin - queued} ms, ran ${end - begin} ms")
             a.handler.post { a.resolve(id, result) }
         }
         if (method == "stats.refresh") refresher.execute(work) else io.execute(work)

@@ -120,12 +120,10 @@ class MainActivity : Activity() {
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         shell.addView(web, 0, FrameLayout.LayoutParams(-1, -1))
         shell.requestApplyInsets()
-        android.util.Log.i("SleepLaunch", "webview ${android.os.SystemClock.uptimeMillis() - launchStart} ms")
         web.loadUrl("$ORIGIN/web/index.html")
     }
 
     // ---- launch cover: last clean stats screen, shown on the first frame and faded out once the page has drawn ----
-    private val launchStart = android.os.SystemClock.uptimeMillis()
     private var launchCover: android.widget.ImageView? = null
     private val launchImage get() = File(cacheDir, "launch.jpg")
     private val launchKey get() = File(cacheDir, "launch.key")
@@ -152,7 +150,6 @@ class MainActivity : Activity() {
     internal fun hideLaunchCover() {
         val cover = launchCover ?: return
         launchCover = null
-        android.util.Log.i("SleepLaunch", "painted ${android.os.SystemClock.uptimeMillis() - launchStart} ms")
         cover.animate().alpha(0f).setDuration(if (motionEnabled()) 180 else 0).withEndAction {
             shell.removeView(cover)
             cover.setImageDrawable(null)
@@ -229,10 +226,7 @@ class MainActivity : Activity() {
             runCatching { startActivity(Intent(Intent.ACTION_VIEW, request.url)) }
             return true
         }
-        override fun onPageFinished(view: WebView, url: String) {
-            pageReady = true
-            android.util.Log.i("SleepLaunch", "page loaded ${android.os.SystemClock.uptimeMillis() - launchStart} ms")
-        }
+        override fun onPageFinished(view: WebView, url: String) { pageReady = true }
     }
 
     internal fun resolve(id: Int, result: Result<Any?>) {
