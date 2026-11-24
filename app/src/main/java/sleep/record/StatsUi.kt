@@ -134,6 +134,27 @@ internal fun MainActivity.renderStats() {
 internal fun clockHour(hour: Int) = String.format(Locale.ROOT, "%02d:00", hour)
 private fun hourRange(at: Long) = "${format(at, "HH:mm")}~${format(nextHourStart(at), "HH:mm")}"
 internal data class TimelineGroup(val at: Long, val heading: String, val lines: List<String>)
+/** One timeline row: back-to-back segments of one app shown together. [duration] is time actually in use. */
+internal data class AppRun(val pkg: String, val label: String, val start: Long, val end: Long, val duration: Long, val parts: Int)
+/**
+ * Display only — stored entries are not touched. Consecutive segments of the same app whose gap is at most
+ * [gap] ms (typically in-app screen changes) fold into one row, unless a lock/unlock event falls in that gap.
+ * Overlapping segments count their shared time once.
+ */
+internal fun mergeAppRuns(apps: List<Pair<Entry, String>>, screenTimes: List<Long>, gap: Long = 1000): List<AppRun> {
+    val runs = mutableListOf<AppRun>()
+    for ((r, label) in apps.sortedWith(compareBy({ it.first.timestamp }, { it.first.duration }))) {
+        val start = r.timestamp
+        val end = r.timestamp + r.duration.coerceAtLeast(0)
+        val last = runs.lastOrNull()
+        val joins = last != null && last.pkg == r.pkg && start - last.end <= gap &&
+            (start <= last.end || screenTimes.none { it in last.end..start })
+        if (joins) runs[runs.lastIndex] = last!!.copy(end = maxOf(last.end, end),
+            duration = last.duration + (end - maxOf(start, last.end)).coerceAtLeast(0), parts = last.parts + 1)
+        else runs += AppRun(r.pkg, label, start, end, end - start, 1)
+    }
+    return runs
+}
 internal data class Timeline(val date: String, val records: List<Hour>, val details: List<Pair<Entry, String>>, val groups: List<TimelineGroup>) {
     fun export() = buildString {
         appendLine("=== $date ===")
@@ -166,10 +187,10 @@ internal fun MainActivity.timelineData(date: String): Timeline {
             if (hour.bonus > 0) append("  奖励 +${hour.bonus}")
         }
         val split = byHour[hour.at].orEmpty()
-        val lines = split.filterNot { it.first.screen }.mapTo(mutableListOf()) { (r, label) ->
-            "${format(r.timestamp, "HH:mm:ss")}  $label  ${durationText(r.duration)}"
-        }
         val screens = split.filter { it.first.screen }.map { it.first }.sortedBy { it.duration }
+        val lines = mergeAppRuns(split.filterNot { it.first.screen }, screens.map { it.duration }).mapTo(mutableListOf()) { run ->
+            "${format(run.start, "HH:mm:ss")}  ${run.label}  ${durationText(run.duration)}"
+        }
         var i = 0
         while (i < screens.size) {
             val event = screens[i]

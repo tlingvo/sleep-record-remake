@@ -458,6 +458,22 @@ class ContractRunner : Instrumentation() {
             expect(5, tracks.size)
             tracks.forEach { assets.openFd("audio/$it").use { fd -> check(fd.length > 0) } }
         }
+        test("Timeline folds same-app segments 1 s apart for display without touching entries") {
+            val h = 1_000_000_000L
+            fun app(pkg: String, start: Long, ms: Long) = Entry(h, pkg, ms, h + start, false) to pkg
+            val bili = "tv.danmaku.bili"
+            val source = listOf(
+                app(bili, 0, 7_400), app(bili, 8_400, 7_000), app(bili, 15_400, 1_000),   // gaps 1000 and 0 → one row
+                app(bili, 17_401, 31_000),                                               // gap 1001 → new row
+                app("com.tencent.mm", 48_401, 2_000), app(bili, 50_401, 3_000),          // another app in between
+                app(bili, 53_901, 2_000),                                                // gap 500 but a lock at 53_600
+                app(bili, 55_401, 4_000))                                                // overlaps by 500 ms
+            val runs = mergeAppRuns(source.shuffled(java.util.Random(7)), listOf(h + 53_600))
+            expect(listOf(3, 1, 1, 1, 2), runs.map(AppRun::parts))
+            expect(listOf(0L, 17_401L, 48_401L, 50_401L, 53_901L), runs.map { it.start - h })
+            expect(listOf(15_400L, 31_000L, 2_000L, 3_000L, 5_500L), runs.map(AppRun::duration))
+            expect(8, source.size)
+        }
         TimeZone.setDefault(previous)
         finish(if (failures == 0) Activity.RESULT_OK else Activity.RESULT_CANCELED, Bundle().apply {
             putString("stream", "\n${results.joinToString("\n")}\n${results.size - failures}/${results.size} passed\n")
