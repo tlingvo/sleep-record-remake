@@ -66,6 +66,12 @@ class ContractRunner : Instrumentation() {
             expect(80 * minutes, overlap.usage[eleven])
             expect(0 to 60, Config().score(eleven, overlap.usage.getValue(eleven)))
             expect(listOf("a", "b"), overlap.entries.map { it.pkg })
+            // A system-reported home app without "launcher" in its name is filtered too; the name rule still applies.
+            val homes = replay(start, eleven + HOUR, sequenceOf(
+                Event(1, "app.lawnchair", eleven), Event(1, "some.launcher3", eleven), Event(1, "reader", eleven + 50 * minutes)
+            ), homes = setOf("app.lawnchair"))
+            expect(10 * minutes, homes.usage[eleven])
+            expect(listOf("reader"), homes.entries.map { it.pkg })
         }
         test("Empty UsageEvents retain old bonus and details, fill ended sleep hours") {
             isolated { store, _ ->
@@ -422,6 +428,29 @@ class ContractRunner : Instrumentation() {
                 expect("COMPLETED", store.state().list("tasks").single().text("status"))
                 expect(2, store.hours().single().bonus)
                 check(runCatching { chats.send(taskId, "再次发送", true, ms) }.isFailure)
+            }
+        }
+        test("Role prompts ride along as system messages for roles still in the chat, and survive backup") {
+            isolated { store, _ ->
+                val chats = Chats(store, catalog)
+                val id = chats.load().single().text("id")
+                chats.edit(id) { chat, state ->
+                    chats.renameRole(chat, state, null, "旁白", "user")
+                    chat.setRolePrompt("助手", "  你是一只猫。 ")
+                    chat.setRolePrompt("我", "我是高三学生")
+                    chat.setRolePrompt("旁白", "只描述环境")
+                    chat.put("messages", JSONArray().put(message("我", "睡不着")))
+                }
+                fun systems() = chats.manual(id).messages.objects().filter { it.text("role") == "system" }.map { it.text("content") }
+                expect(listOf("以下是角色「我」（用户）的设定：\n我是高三学生", "以下是角色「助手」（助手）的设定：\n你是一只猫。",
+                    "以下是角色「旁白」（用户）的设定：\n只描述环境"), systems())
+                expect("user", chats.manual(id).messages.objects().last().text("role"))
+                chats.edit(id) { chat, _ -> chats.deleteRole(chat, "旁白", false); chat.setRolePrompt("我", " ") }
+                expect(listOf("以下是角色「助手」（助手）的设定：\n你是一只猫。"), systems())
+                val backup = Backup.export(store)
+                Backup.import(store, backup)
+                expect("你是一只猫。", store.state().find("conversations", id)!!.roles().first { it.text("name") == "助手" }.text("prompt"))
+                expect("只描述环境", store.state().find("conversations", id)!!.roles().first { it.text("name") == "旁白" }.text("prompt"))
             }
         }
         test("Streaming SSE parser joins fragments, tolerates malformed blocks, ends on DONE") {

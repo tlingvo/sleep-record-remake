@@ -187,6 +187,7 @@ internal class Store internal constructor(context: Context, name: String = "slee
         val zone = TimeZone.getDefault().id
         val firstDate = config.date(clock(ms).apply { add(Calendar.DAY_OF_YEAR, -30) }.timeInMillis)
         val dates = generateSequence(firstDate, ::nextDate).takeWhile { it <= config.date(ms) }.toList()
+        val homes = homePackages(context)
         val batches = dates.mapNotNull { date ->
             val (start, end) = config.window(date)
             val queryEnd = minOf(end, ms)
@@ -196,7 +197,7 @@ internal class Store internal constructor(context: Context, name: String = "slee
             val events = sequence {
                 while (stream.getNextEvent(event)) yield(Event(event.eventType, event.packageName.orEmpty(), event.timeStamp))
             }
-            Triple(start, end, replay(start, queryEnd, events))
+            Triple(start, end, replay(start, queryEnd, events, homes))
         }
         transact { db, s ->
             val active = Config(s.optJSONObject("settings") ?: JSONObject())
@@ -222,3 +223,17 @@ internal fun hasUsageAccess(context: Context): Boolean {
     else ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName)
     return mode == AppOpsManager.MODE_ALLOWED
 }
+
+/**
+ * Packages the system offers as home screens (third-party launchers such as Lawnchair included).
+ * Fallback homes registered with a negative priority, like Settings' FallbackHome, are skipped so real
+ * apps are never filtered out. Needs the HOME intent in the manifest's <queries> on Android 11+.
+ */
+@Suppress("DEPRECATION")
+internal fun homePackages(context: Context): Set<String> = runCatching {
+    val home = android.content.Intent(android.content.Intent.ACTION_MAIN).addCategory(android.content.Intent.CATEGORY_HOME)
+    context.packageManager.queryIntentActivities(home, android.content.pm.PackageManager.MATCH_ALL)
+        .filter { it.priority >= 0 }
+        .mapNotNullTo(hashSetOf()) { it.activityInfo?.packageName }
+        .minus(context.packageName)
+}.getOrDefault(emptySet())

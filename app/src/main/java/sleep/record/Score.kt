@@ -173,11 +173,15 @@ internal data class Hour(val at: Long, val usage: Long, val score: Int, val dedu
 internal data class Entry(val at: Long, val pkg: String, val duration: Long, val timestamp: Long, val screen: Boolean)
 internal data class Event(val type: Int, val pkg: String, val timestamp: Long)
 internal data class Replay(val usage: Map<Long, Long>, val entries: List<Entry>)
-internal fun replay(start: Long, end: Long, events: Sequence<Event>): Replay {
+/**
+ * [homes] are the packages the system reports as home screens. A package counts as a launcher when its name
+ * looks like one (the legacy rule) or the system lists it as a home app; either is enough.
+ */
+internal fun replay(start: Long, end: Long, events: Sequence<Event>, homes: Set<String> = emptySet()): Replay {
     val foreground = linkedMapOf<String, Long>()
     val usage = mutableMapOf<Long, Long>()
     val entries = mutableListOf<Entry>()
-    fun desktop(pkg: String) = pkg.contains("launcher", true) || pkg.contains("桌面") || pkg.contains("systemui", true)
+    fun desktop(pkg: String) = pkg.contains("launcher", true) || pkg.contains("桌面") || pkg.contains("systemui", true) || pkg in homes
     fun close(pkg: String, a: Long, b: Long) {
         if (b <= a || desktop(pkg)) return
         var hour = hourStart(a)

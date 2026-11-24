@@ -1,11 +1,15 @@
 <resources>
+    <!-- Android 12+ always shows a system splash: make it the bare night sky with no icon. -->
     <style name="Theme.睡时记录" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:colorAccent">#B0BCFF</item>
-        <item name="android:windowBackground">#0D0F17</item>
+        <item name="android:windowBackground">@drawable/launch_sky</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowSplashScreenBackground">@color/sky_mid</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_blank</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
     </style>
 </resources>

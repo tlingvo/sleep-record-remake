@@ -99,6 +99,7 @@ internal object Backup {
                         require(field(role, "type", p, "user") in listOf("system", "user", "assistant")) { "$p.type 无效" }
                         field(role, "archived", p, false); field(role, "isActive", p, false)
                         if (!role.isNull("avatarPath")) field<String>(role, "avatarPath", p)
+                        if (!role.isNull("prompt")) field<String>(role, "prompt", p)
                     }
                 }
             }

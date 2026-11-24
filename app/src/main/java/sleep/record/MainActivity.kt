@@ -1,6 +1,8 @@
 package sleep.record
 
 import android.Manifest
+import android.animation.ValueAnimator
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
 import android.content.res.Configuration
@@ -10,106 +12,318 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
-import android.provider.Settings
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.Toast
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.ByteArrayInputStream
+import java.io.File
 import java.util.concurrent.Executors
 
-internal data class Screen(val type: String, val arg: String = "")
 class MainActivity : Activity() {
+    companion object {
+        const val ORIGIN = "https://appassets.androidplatform.net"
+        private val night = Color.parseColor("#05060C")
+        private val dawn = Color.parseColor("#F6F4F0")
+    }
     internal val store by lazy { Store.get(this) }
     internal val catalog by lazy { Catalog(this) }
     internal val tasks by lazy { Tasks(store, catalog) }
     internal val chats by lazy { Chats(store, catalog) }
-    internal val chat by lazy { ChatUi(this) }
-    internal val player by lazy { PlayerUi(this) }
+    internal val player by lazy { Player(this) }
     internal val handler = Handler(Looper.getMainLooper())
-    private val io = Executors.newSingleThreadExecutor()
-    internal lateinit var root: FrameLayout
-    internal lateinit var body: LinearLayout
-    internal lateinit var palette: Palette
-    private lateinit var shell: FrameLayout
-    private lateinit var scene: SceneHost
-    private lateinit var floating: OverlayHost
-    internal var keyboardVisible = false
-        private set
-    internal var overlayPage: Screen? = null
-        private set
-    private val overlayBack = ArrayDeque<Screen>()
-    private var renderedKey = ""
-    private var lastScroll: ScrollView? = null
-    private val scrollOffsets = mutableMapOf<String, Int>()
-    private var navView: View? = null
-    private var navSignature: Pair<Int, Palette>? = null
-    internal var screen: Screen? = null
-    private val back = ArrayDeque<Screen?>()
-    internal var tab = 0
-    internal var taskTab = 0
-    internal var questionSelection = -1
-    internal var notice = false
-    internal var archived = false
-    internal var oneTimeExpanded = false
-    internal var earlyArchive = false
-    internal var timelineCollapsed = mutableSetOf<Long>()
-    internal var rest: Rest? = null
-    internal var restResult: Rest? = null
-    internal var renderTick: Runnable? = null
-    internal var refreshing = false
-    private var restLockRequested = false
-    private var navBackdropUntil = 0L
-    private val navBackdropPulse = object : Runnable {
-        override fun run() {
-            invalidateNavBackdrop()
-            if (SystemClock.uptimeMillis() < navBackdropUntil) handler.postDelayed(this, 16)
-        }
-    }
-    private var permitted = false
-    private var permissionAsked = false
-    private var checkedUsage = false
-    private var exportText: String? = null
-    private var exportTimelineDate: String? = null
-    private var importVisible = false
     internal val config get() = store.config()
+    private val files = Executors.newSingleThreadExecutor()
+    private lateinit var shell: FrameLayout
+    private lateinit var web: WebView
+    private lateinit var bridge: Bridge
+    private var pageReady = false
+    private var lastInsets = JSONObject()
+    @Volatile internal var permitted = false
+    private var permissionAsked = false
+    private var restLockRequested = false
+    private var exportTimelineDate: String? = null
 
+    @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        permissionAsked = savedInstanceState?.getBoolean("permissionAsked") ?: false
+        exportTimelineDate = savedInstanceState?.getString("timelineExport")
         if (Build.VERSION.SDK_INT >= 30) window.setDecorFitsSystemWindows(false)
         @Suppress("DEPRECATION")
-        if (Build.VERSION.SDK_INT < 35) {
+        if (Build.VERSION.SDK_INT in 30..34) {
             window.statusBarColor = Color.TRANSPARENT
-            if (Build.VERSION.SDK_INT >= 30) window.navigationBarColor = Color.TRANSPARENT
+            window.navigationBarColor = Color.TRANSPARENT
         }
         if (Build.VERSION.SDK_INT >= 29) {
             window.isNavigationBarContrastEnforced = false
+            @Suppress("DEPRECATION")
             window.isStatusBarContrastEnforced = false
         }
-        tab = savedInstanceState?.getInt("tab") ?: 0
-        permissionAsked = savedInstanceState?.getBoolean("permissionAsked") ?: false
-        exportTimelineDate = savedInstanceState?.getString("timelineExport")
-        if (!store.state().optBoolean("notice_shown")) {
-            screen = Screen("question", "用户须知main")
-            notice = true
+        permitted = hasUsageAccess(this)
+        bridge = Bridge(this)
+        shell = FrameLayout(this)
+        setContentView(shell)
+        applyTheme()
+        if (permitted && store.state().optBoolean("notice_shown") && !restRunning()) showLaunchCover()
+        if (Build.VERSION.SDK_INT >= 30) shell.setOnApplyWindowInsetsListener { _, insets ->
+            val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+            val ime = insets.getInsets(WindowInsets.Type.ime())
+            val typing = insets.isVisible(WindowInsets.Type.ime()) && ime.bottom > bars.bottom
+            if (::web.isInitialized) (web.layoutParams as FrameLayout.LayoutParams).let { lp ->
+                val margin = if (typing) ime.bottom else 0
+                if (lp.bottomMargin != margin) { lp.bottomMargin = margin; web.layoutParams = lp }
+            }
+            val d = resources.displayMetrics.density
+            lastInsets = json("top" to bars.top / d, "bottom" to (if (typing) 0f else bars.bottom / d),
+                "left" to bars.left / d, "right" to bars.right / d, "ime" to typing)
+            emit("insets", lastInsets)
+            insets
         }
-        if (!notice) tasks.rest()?.takeIf { it.end > now() }?.let {
-            rest = it.copy(seconds = ((it.end - now() + 999) / 1000).coerceAtLeast(0))
-            screen = Screen("rest")
+        // Loading Chromium blocks the main thread for a few hundred ms on a cold process, so let the first
+        // frame (cached launch image or window background) reach the screen before creating the WebView.
+        shell.post { createWebView() }
+    }
+    @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
+    private fun createWebView() {
+        if (isDestroyed || ::web.isInitialized) return
+        web = WebView(this).apply {
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isVerticalScrollBarEnabled = false
+            isHorizontalScrollBarEnabled = false
+            setBackgroundColor(if (isDark()) night else dawn)
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.allowFileAccess = false
+            settings.allowContentAccess = false
+            settings.setSupportZoom(false)
+            settings.builtInZoomControls = false
+            settings.mediaPlaybackRequiresUserGesture = true
+            settings.textZoom = (resources.configuration.fontScale * 100).toInt().coerceIn(85, 160)
+            addJavascriptInterface(bridge, "SleepNative")
+            webViewClient = Pages()
+            webChromeClient = object : android.webkit.WebChromeClient() {
+                override fun onConsoleMessage(message: android.webkit.ConsoleMessage): Boolean {
+                    android.util.Log.println(if (message.messageLevel() == android.webkit.ConsoleMessage.MessageLevel.ERROR) android.util.Log.ERROR else android.util.Log.INFO,
+                        "SleepWeb", "${message.message()} @${message.sourceId().substringAfterLast('/')}:${message.lineNumber()}")
+                    return true
+                }
+            }
         }
-        render()
+        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+        shell.addView(web, 0, FrameLayout.LayoutParams(-1, -1))
+        shell.requestApplyInsets()
+        android.util.Log.i("SleepLaunch", "webview ${android.os.SystemClock.uptimeMillis() - launchStart} ms")
+        web.loadUrl("$ORIGIN/web/index.html")
+    }
+
+    // ---- launch cover: last clean stats screen, shown on the first frame and faded out once the page has drawn ----
+    private val launchStart = android.os.SystemClock.uptimeMillis()
+    private var launchCover: android.widget.ImageView? = null
+    private val launchImage get() = File(cacheDir, "launch.jpg")
+    private val launchKey get() = File(cacheDir, "launch.key")
+    private var lastCapture = 0L
+    /** Screen size, theme, font scale and app version: a cached image is only reused when all of them match. */
+    private fun coverKey(): String {
+        val (w, h) = if (Build.VERSION.SDK_INT >= 30) windowManager.currentWindowMetrics.bounds.let { it.width() to it.height() }
+        else android.util.DisplayMetrics().also { @Suppress("DEPRECATION") windowManager.defaultDisplay.getRealMetrics(it) }.let { it.widthPixels to it.heightPixels }
+        return "${w}x$h ${if (isDark()) "night" else "dawn"} ${resources.configuration.fontScale} ${BuildConfig.VERSION_CODE}"
+    }
+    private fun showLaunchCover() {
+        val image = runCatching {
+            if (!launchImage.isFile || launchKey.readText() != coverKey()) return
+            android.graphics.BitmapFactory.decodeFile(launchImage.path)
+        }.getOrNull() ?: return
+        launchCover = android.widget.ImageView(this).apply {
+            scaleType = android.widget.ImageView.ScaleType.FIT_XY
+            setImageBitmap(image)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        shell.addView(launchCover, FrameLayout.LayoutParams(-1, -1))
+        handler.postDelayed({ hideLaunchCover() }, 3000)
+    }
+    internal fun hideLaunchCover() {
+        val cover = launchCover ?: return
+        launchCover = null
+        android.util.Log.i("SleepLaunch", "painted ${android.os.SystemClock.uptimeMillis() - launchStart} ms")
+        cover.animate().alpha(0f).setDuration(if (motionEnabled()) 180 else 0).withEndAction {
+            shell.removeView(cover)
+            cover.setImageDrawable(null)
+        }.start()
+    }
+    /** Copies the window into the launch image. The page only asks for this when the stats tab is at rest. */
+    internal fun captureLaunch() {
+        if (Build.VERSION.SDK_INT < 26 || launchCover != null || isFinishing || isDestroyed) return
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - lastCapture < 5000) return
+        val decor = window.decorView
+        val key = coverKey()
+        if (decor.width <= 0 || !key.startsWith("${decor.width}x${decor.height} ")) return
+        lastCapture = now
+        val bitmap = android.graphics.Bitmap.createBitmap(decor.width, decor.height, android.graphics.Bitmap.Config.ARGB_8888)
+        runCatching {
+            android.view.PixelCopy.request(window, bitmap, { result ->
+                if (result != android.view.PixelCopy.SUCCESS) { bitmap.recycle(); return@request }
+                files.execute {
+                    runCatching {
+                        val tmp = File(cacheDir, "launch.tmp")
+                        tmp.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, it) }
+                        check(tmp.renameTo(launchImage) || (launchImage.delete() && tmp.renameTo(launchImage)))
+                        launchKey.writeText(key)
+                    }
+                    bitmap.recycle()
+                }
+            }, handler)
+        }.onFailure { bitmap.recycle() }
+    }
+    override fun onPause() {
+        super.onPause()
+        if (pageReady) web.evaluateJavascript("window.app&&app.capturable&&app.capturable()") { if (it == "true") { lastCapture = 0; captureLaunch() } }
     }
     override fun onSaveInstanceState(outState: Bundle) {
-        outState.putInt("tab", tab)
         outState.putBoolean("permissionAsked", permissionAsked)
         outState.putString("timelineExport", exportTimelineDate)
         super.onSaveInstanceState(outState)
     }
-    private fun activeType() = overlayPage?.type ?: screen?.type
+
+    /** Serves bundled pages and saved avatars from one https origin, so ES modules and fonts load normally. */
+    private inner class Pages : WebViewClient() {
+        override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+            val url = request.url
+            if (url.host != "appassets.androidplatform.net") return null
+            val path = url.path.orEmpty()
+            return runCatching {
+                when {
+                    path.startsWith("/web/") && ".." !in path -> {
+                        val asset = path.removePrefix("/")
+                        WebResourceResponse(mime(asset), if (mime(asset).startsWith("text") || asset.endsWith(".js")) "utf-8" else null,
+                            assets.open(asset)).apply { responseHeaders = mapOf("Cache-Control" to "no-cache") }
+                    }
+                    path.startsWith("/avatar/") -> {
+                        val name = path.removePrefix("/avatar/")
+                        require(name.matches(Regex("[A-Za-z0-9_.-]+")))
+                        val dir = File(filesDir, "avatars").canonicalFile
+                        val file = File(dir, name).canonicalFile
+                        require(file.parentFile == dir && file.isFile)
+                        WebResourceResponse("image/png", null, file.inputStream())
+                    }
+                    else -> missing()
+                }
+            }.getOrElse { missing() }
+        }
+        private fun missing() = WebResourceResponse("text/plain", "utf-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+        private fun mime(path: String) = when (path.substringAfterLast('.').lowercase()) {
+            "html" -> "text/html"; "js" -> "text/javascript"; "css" -> "text/css"; "json" -> "application/json"
+            "svg" -> "image/svg+xml"; "png" -> "image/png"; "woff2" -> "font/woff2"; "txt" -> "text/plain"
+            else -> "application/octet-stream"
+        }
+        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+            if (request.url.host == "appassets.androidplatform.net") return false
+            runCatching { startActivity(Intent(Intent.ACTION_VIEW, request.url)) }
+            return true
+        }
+        override fun onPageFinished(view: WebView, url: String) {
+            pageReady = true
+            android.util.Log.i("SleepLaunch", "page loaded ${android.os.SystemClock.uptimeMillis() - launchStart} ms")
+        }
+    }
+
+    internal fun resolve(id: Int, result: Result<Any?>) {
+        if (isDestroyed || !::web.isInitialized) return
+        val ok = result.isSuccess
+        val payload = result.fold({ js(it) }, { js(json("message" to (it.message ?: "请重试"))) })
+        web.evaluateJavascript("window.__native&&__native.resolve($id,$ok,$payload)", null)
+    }
+    internal fun emit(type: String, data: Any?) {
+        val script = "window.__native&&__native.emit(${JSONObject.quote(type)},${js(data)})"
+        handler.post { if (!isDestroyed && ::web.isInitialized) web.evaluateJavascript(script, null) }
+    }
+    private fun js(value: Any?): String = when (value) {
+        null, Unit, JSONObject.NULL -> "null"
+        is JSONObject, is JSONArray -> value.toString()
+        is String -> JSONObject.quote(value)
+        is Boolean, is Int, is Long -> value.toString()
+        is Number -> if (value.toDouble().isFinite()) value.toString() else "null"
+        else -> JSONObject.quote(value.toString())
+    }
+    internal fun insets(): JSONObject = lastInsets
+    internal fun motionEnabled() = if (Build.VERSION.SDK_INT >= 26) ValueAnimator.areAnimatorsEnabled() else
+        android.provider.Settings.Global.getFloat(contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f
+
+    // ---- theme ----
+    internal fun isDark(): Boolean = when (config.number("darkMode")) {
+        1 -> true
+        2 -> false
+        else -> resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+    }
+    private var appliedNightMode = -1
+    internal fun applyTheme() {
+        val setting = config.number("darkMode")
+        if (Build.VERSION.SDK_INT >= 31) {
+            val mode = when (setting) {
+                1 -> android.app.UiModeManager.MODE_NIGHT_YES
+                2 -> android.app.UiModeManager.MODE_NIGHT_NO
+                else -> android.app.UiModeManager.MODE_NIGHT_AUTO
+            }
+            if (mode != appliedNightMode) {
+                appliedNightMode = mode
+                runCatching { getSystemService(android.app.UiModeManager::class.java).setApplicationNightMode(mode) }
+            }
+        }
+        val dark = isDark()
+        val bg = if (dark) night else dawn
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(bg))
+        if (::web.isInitialized) web.setBackgroundColor(bg)
+        if (Build.VERSION.SDK_INT >= 30) {
+            val light = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            window.insetsController?.setSystemBarsAppearance(if (dark) 0 else light, light)
+        } else {
+            @Suppress("DEPRECATION")
+            window.statusBarColor = if (dark) Color.parseColor("#0F1534") else Color.parseColor("#EEF0FF")
+            @Suppress("DEPRECATION")
+            window.navigationBarColor = bg
+            @Suppress("DEPRECATION")
+            if (Build.VERSION.SDK_INT >= 23) window.decorView.systemUiVisibility = if (dark) 0 else View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        }
+    }
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (::web.isInitialized) web.settings.textZoom = (newConfig.fontScale * 100).toInt().coerceIn(85, 160)
+        applyTheme()
+        emit("theme", isDark())
+    }
+
+    // ---- lifecycle ----
+    override fun onResume() {
+        super.onResume()
+        val previous = permitted
+        permitted = hasUsageAccess(this)
+        syncRestLockTask()
+        emit("resume", json("permitted" to permitted, "changed" to (previous != permitted)))
+        if (ready() && permitted != previous) enterReady()
+    }
+    override fun onStop() {
+        bridge.cancelStream()
+        player.release()
+        emit("player.released", null)
+        super.onStop()
+    }
+    override fun onDestroy() {
+        bridge.cancelStream()
+        player.release()
+        bridge.shutdown()
+        files.shutdown()
+        handler.removeCallbacksAndMessages(null)
+        if (::web.isInitialized) web.destroy()
+        super.onDestroy()
+    }
     private fun restRunning() = tasks.rest()?.end?.let { it > now() } == true
     internal fun syncRestLockTask() {
         if (restRunning()) {
@@ -119,39 +333,6 @@ class MainActivity : Activity() {
             restLockRequested = false
         }
     }
-    override fun onResume() {
-        super.onResume()
-        val previous = permitted
-        permitted = hasUsageAccess(this)
-        val returned = !checkedUsage || previous != permitted
-        checkedUsage = true
-        if (returned) render()
-        syncRestLockTask()
-        enterReadyState(returned)
-        if (activeType() in listOf("rest", "player")) renderScene()
-    }
-    private fun enterReadyState(startService: Boolean) {
-        if (ready()) {
-            if (screen == null && tab == 0 && !importVisible) refresh(false)
-            if (startService) SleepService.syncFromActivity(this) else SleepService.update()
-            if (Build.VERSION.SDK_INT >= 33 && !notificationsAllowed(this) && !permissionAsked &&
-                !store.state().optBoolean("notification_permission_asked")) {
-                permissionAsked = true
-                store.edit { it.put("notification_permission_asked", true) }
-                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 11)
-            }
-        }
-    }
-    override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(code, permissions, grantResults)
-        SleepService.update()
-    }
-    override fun onStop() {
-        renderTick?.let(handler::removeCallbacks)
-        if (activeType() == "player") player.release()
-        chat.cancel()
-        super.onStop()
-    }
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         if (restRunning() && !isFinishing) handler.post {
@@ -160,370 +341,73 @@ class MainActivity : Activity() {
             }
         }
     }
-    override fun onDestroy() {
-        chat.cancel()
-        player.release()
-        handler.removeCallbacksAndMessages(null)
-        io.shutdown()
-        super.onDestroy()
-    }
-    override fun onConfigurationChanged(newConfig: Configuration) {
-        super.onConfigurationChanged(newConfig)
-        savedScroll()
-        floating.hide(false)
-        renderScene()
-    }
-
-    private val sheets = setOf("chat-drawer", "chat-settings", "avatar", "audio", "player", "dev", "details")
-    internal fun open(next: Screen) {
-        if (restRunning()) { toast("休息计时结束前请留在此页面，可以关闭屏幕"); return }
-        hideKeyboard()
-        if (next.type in sheets) {
-            val previous = overlayPage
-            if (previous == next) return
-            previous?.let(overlayBack::addLast)
-            overlayOffsets.remove("${next.type}:${next.arg}")
-            overlayPage = next
-            renderOverlay(fresh = previous == null)
-            return
-        }
-        dismissOverlays(false)
-        if (screen == null && tab == 1) chat.cancel()
-        back.addLast(screen ?: Screen("root"))
-        screen = next
-        if (next.type == "question") questionSelection = -1
-        if (next.type == "timeline") timelineCollapsed.clear()
-        renderScene(Motion.PUSH)
-    }
-    private fun dismissOverlays(animate: Boolean) {
-        if (overlayPage == null) return
-        if (activeType() == "player") player.release()
-        if (activeType() == "avatar") chat.discardPhoto()
-        overlayBack.clear()
-        overlayPage = null
-        floating.hide(animate)
-    }
-    internal fun closePage() {
-        if (screen?.type == "rest" && restRunning()) { toast("休息计时结束前请留在此页面，可以关闭屏幕"); return }
-        hideKeyboard()
-        if (overlayPage != null) {
-            val closing = activeType()
-            if (closing == "player") player.release()
-            if (closing == "avatar") chat.discardPhoto()
-            val previous = overlayBack.removeLastOrNull()
-            overlayPage = previous
-            if (previous != null) renderOverlay() else {
-                floating.hide()
-                if (closing == "chat-settings" || closing == "dev") renderScene()
-            }
-            return
-        }
-        val wasReady = ready()
-        if (notice) {
-            notice = false
-            store.edit { it.put("notice_shown", true) }
-        }
-        screen = back.removeLastOrNull()?.takeUnless { it.type == "root" }
-        renderScene(Motion.POP) { enterReadyState(startService = !wasReady) }
-    }
-    internal fun selectTab(index: Int) {
-        if (restRunning()) { toast("休息计时结束前请留在此页面，可以关闭屏幕"); return }
-        if (index !in 0..3) return
-        hideKeyboard()
-        val previous = tab
-        val inStack = screen != null
-        dismissOverlays(true)
-        if (tab == 1 && index != 1) chat.cancel(repaint = false)
-        back.clear()
-        screen = null
-        tab = index
-        val direction = when {
-            index > previous -> Motion.LEFT
-            index < previous -> Motion.RIGHT
-            inStack -> Motion.POP
-            else -> Motion.NONE
-        }
-        renderScene(direction) {
-            if (index == 0 && tab == 0 && screen == null) { importVisible = false; refresh(false) }
-        }
-        if (ready()) SleepService.syncFromActivity(this)
-    }
-    /** Previous task section, so the segmented highlight can slide from it; equals [taskTab] when settled. */
-    internal var sectionFrom = 0
-    /** Direction the next task-section content slides in from: 1 = right, -1 = left, 0 = no slide. */
-    internal var sectionSlide = 0
-    internal fun selectTaskSection(index: Int) {
-        if (taskTab == index) return
-        sectionFrom = taskTab
-        sectionSlide = if (index > taskTab) 1 else -1
-        taskTab = index
-        renderScene()
-    }
-    internal fun nextQuestion(next: String) {
-        if (screen?.type != "question" || catalog.questions[next] == null) return
-        questionSelection = -1
-        screen = Screen("question", next)
-        renderScene(Motion.QUIZ)
-    }
-    internal fun scrollTarget(view: ScrollView, parent: LinearLayout) {
-        if (renderingOverlay) { if (parent === body && overlayScroll == null) overlayScroll = view; return }
-        if (parent === body && !(screen == null && tab == 1)) lastScroll = view
-    }
-    private fun savedScroll() {
-        lastScroll?.let { scrollOffsets[renderedKey] = it.scrollY }
-    }
-    private fun hideKeyboard() {
-        currentFocus?.let { focused ->
-            getSystemService(android.view.inputmethod.InputMethodManager::class.java).hideSoftInputFromWindow(focused.windowToken, 0)
-            focused.clearFocus()
-        }
-    }
-    @Deprecated("Used for compatibility with the in-app page stack")
-    override fun onBackPressed() {
-        if (restRunning()) { toast("休息计时结束前请留在此页面，可以关闭屏幕"); return }
-        if (overlayPage != null) { closePage(); return }
-        if (screen?.type == "question") return
-        if (screen != null) closePage() else if (tab != 0) selectTab(0) else super.onBackPressed()
-    }
-    internal fun ready() = permitted && !notice
-    internal fun inChat() = tab == 1 && screen == null
-    internal fun isShowing(type: String) = activeType() == type
-
-    private fun mount() {
-        shell = FrameLayout(this)
-        root = FrameLayout(this).apply { isFocusableInTouchMode = true }
-        shell.addView(root, FrameLayout.LayoutParams(-1, -1))
-        scene = SceneHost(this)
-        root.addView(scene, FrameLayout.LayoutParams(-1, -1))
-        floating = OverlayHost(this)
-        shell.addView(floating, FrameLayout.LayoutParams(-1, -1))
-        setContentView(shell)
-        if (Build.VERSION.SDK_INT >= 30) {
-            shell.setOnApplyWindowInsetsListener { view, insets ->
-                val safe = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-                val ime = insets.getInsets(WindowInsets.Type.ime())
-                keyboardVisible = insets.isVisible(WindowInsets.Type.ime())
-                updateNavVisibility()
-                view.setPadding(safe.left, safe.top, safe.right, maxOf(ime.bottom, safe.bottom))
-                refreshNavBackdropDuring(180)
-                insets
-            }
-            shell.requestApplyInsets()
-        }
-    }
-    private fun updateNavVisibility() {
-        navView?.visibility = if (screen == null && ready()) View.VISIBLE else View.GONE
-    }
-    internal fun chatComposerBottomInset() = dp(82)
-    internal val navBackdropSource: View get() = scene
-    internal fun invalidateNavBackdrop() {
-        (navView as? NavDock)?.refreshBackdrop()
-        if (inChat()) chat.refreshComposerBackdrop()
-    }
-    internal fun refreshNavBackdropDuring(durationMs: Long = 420) {
-        navBackdropUntil = SystemClock.uptimeMillis() + durationMs
-        handler.removeCallbacks(navBackdropPulse)
-        navBackdropPulse.run()
-    }
-    internal fun repaintChat() = renderScene()
-    internal fun render() = if (overlayPage == null) renderScene() else renderOverlay()
-    private var appliedNightMode = -1
-    /** Hands the in-app theme to the system (API 31+) so the starting window and system dialogs match it. */
-    private fun syncNightMode(setting: Int) {
-        if (Build.VERSION.SDK_INT < 31) return
-        val mode = when (setting) {
-            1 -> android.app.UiModeManager.MODE_NIGHT_YES
-            2 -> android.app.UiModeManager.MODE_NIGHT_NO
-            else -> android.app.UiModeManager.MODE_NIGHT_AUTO
-        }
-        if (mode == appliedNightMode) return
-        appliedNightMode = mode
-        runCatching { getSystemService(android.app.UiModeManager::class.java).setApplicationNightMode(mode) }
-    }
-    private fun renderScene(motion: Motion = Motion.NONE, after: (() -> Unit)? = null) {
-        renderTick?.let(handler::removeCallbacks)
-        renderTick = null
-        if (!::shell.isInitialized) mount()
-        val newPalette = Palette.forMode(config.number("darkMode"), resources.configuration)
-        val restyleOverlay = ::palette.isInitialized && newPalette != palette
-        palette = newPalette
-        syncNightMode(config.number("darkMode"))
-        shell.setBackgroundColor(palette.bg)
-        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(palette.bg))
-        if (Build.VERSION.SDK_INT >= 30) {
-            window.insetsController?.setSystemBarsAppearance(
-                if (palette.dark) 0 else WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
-                WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
-        } else {
-            @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = if (palette.dark) 0 else View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-            @Suppress("DEPRECATION")
-            window.statusBarColor = palette.bg
-        }
-        savedScroll()
-        lastScroll = null
-        val page = screen
-        renderedKey = if (page != null) "${page.type}:${page.arg}" else if (tab == 2) "tab:$tab:$taskTab" else "tab:$tab"
-        // Quiz navigation always starts at the top, even when a branch returns to a visited question.
-        if (page?.type == "question" && motion != Motion.NONE) scrollOffsets.remove(renderedKey)
-        body = vertical().apply { setBackgroundColor(palette.bg) }
-        when {
-            page?.type == "question" -> renderQuestion(page.arg)
-            !ready() -> usageGate()
-            page?.type == "timeline" -> renderTimeline(page.arg)
-            page?.type == "rest" -> renderRest()
-            page != null -> title("找不到页面", back = true)
-            tab == 0 -> renderStats()
-            tab == 1 -> chat.show()
-            tab == 2 -> renderTasks()
-            else -> renderSettings()
-        }
-        lastScroll?.let { scroll -> scrollOffsets[renderedKey]?.let { y -> restoreScroll(scroll, y) } }
-        scene.show(body, motion, after)
-        handler.postDelayed({ invalidateNavBackdrop() }, if (motion == Motion.NONE) 40L else 380L)
-        if (ready() && page == null && navSignature != (tab to palette)) {
-            val previous = navView
-            val next = navigation(previous as? NavDock)
-            previous?.let(shell::removeView)
-            navView = next
-            navSignature = tab to palette
-            shell.addView(next, 1, FrameLayout.LayoutParams(-1, dp(79), android.view.Gravity.BOTTOM))
-        }
-        updateNavVisibility()
-        if (overlayPage != null) {
-            if (restyleOverlay) floating.hide(false)
-            renderOverlay()
-        }
-    }
-    private var renderingOverlay = false
-    private var overlayScroll: ScrollView? = null
-    private val overlayOffsets = mutableMapOf<String, Int>()
-    private var overlayKey: String? = null
-    private fun renderOverlay(fresh: Boolean = false) {
-        val page = overlayPage ?: return
-        renderTick?.let(handler::removeCallbacks)
-        renderTick = null
-        val key = "${page.type}:${page.arg}"
-        overlayScroll?.let { previous -> overlayKey?.let { overlayOffsets[it] = previous.scrollY } }
-        overlayScroll = null
-        if (fresh) overlayOffsets.clear()
-        overlayKey = key
-        val beneath = body
-        val panel = vertical().apply { isFocusableInTouchMode = true }
-        body = panel
-        renderingOverlay = true
-        try {
-            if (page.type != "chat-drawer") body.addView(vertical().apply {
-                gravity = android.view.Gravity.CENTER
-                addView(View(this@MainActivity).apply { background = shape(palette.muted.withOpacity(0x66), 10) }, LinearLayout.LayoutParams(dp(32), dp(4)))
-            }, LinearLayout.LayoutParams(-1, dp(20)))
-            when (page.type) {
-                "chat-drawer" -> chat.drawer()
-                "chat-settings" -> chat.settings()
-                "avatar" -> chat.crop()
-                "audio" -> player.list()
-                "player" -> player.show(page.arg)
-                "dev" -> renderDeveloper()
-                "details" -> renderDetails()
-            }
-        } finally {
-            body = beneath
-            renderingOverlay = false
-        }
-        overlayScroll?.let { scroll -> overlayOffsets[key]?.let { y -> restoreScroll(scroll, y) } }
-        floating.show(panel, page, fresh)
-    }
-    private fun usageGate() {
-        title("使用情况访问")
-        val content = scroller(body)
-        val card = content.card()
-        card.addView(MoonArt(this), LinearLayout.LayoutParams(-1, dp(170)))
-        card.label("授权后开始记录", 26, bold = true)
-        card.label("睡时记录通过 Android 的使用事件计算夜间用量。应用使用历史保存在此设备。", 15, palette.muted, gap = 12)
-        card.action("打开使用情况访问设置", primary = true) {
-            runCatching { startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }.onFailure { toast("无法打开系统设置") }
-        }
-        card.action("已授权，重新检查") {
-            permitted = hasUsageAccess(this)
-            render()
-            if (ready()) enterReadyState(startService = true) else toast("请在系统设置中允许睡时记录访问使用情况")
-        }
-    }
-    internal fun refresh(manual: Boolean) {
-        if (!ready() || refreshing) return
-        val elapsed = now() - store.state().optLong("last_refresh_time")
-        if (!manual && elapsed in 0..600000) return
-        refreshing = true
-        if (screen == null && tab == 0 && overlayPage == null) renderScene()
-        background({ store.refresh(applicationContext, !manual) }) {
-            refreshing = false
-            it.onFailure { error -> showError(error) }
-            if (screen == null && overlayPage == null && tab in listOf(0, 2)) renderScene()
-        }
-    }
-    internal fun applySettings(settings: Map<String, String>, reset: Boolean = false, repaint: Boolean = true) {
-        val backfill = store.adjustSettings(settings, reset)
-        val invalid = config.invalidKeys()
-        if (invalid.isNotEmpty()) toast("部分参数已使用默认值：${invalid.joinToString()}")
+    private fun ready() = permitted && store.state().optBoolean("notice_shown")
+    /** Called by the page once usage access is granted and the first-run notice is done. */
+    internal fun enterReady() {
+        if (!ready()) return
         SleepService.syncFromActivity(this)
-        if (repaint) render()
-        if (backfill) refresh(false)
-    }
-    internal fun <T> background(work: () -> T, complete: (Result<T>) -> Unit) {
-        io.execute {
-            val result = runCatching(work)
-            handler.post { if (!isDestroyed && !isFinishing) complete(result) }
+        if (Build.VERSION.SDK_INT >= 33 && !notificationsAllowed(this) && !permissionAsked &&
+            !store.state().optBoolean("notification_permission_asked")) {
+            permissionAsked = true
+            store.edit { it.put("notification_permission_asked", true) }
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 11)
         }
     }
-    internal fun attempt(block: () -> Unit) { runCatching(block).onFailure(::showError) }
-    internal fun showError(error: Throwable) = alert("操作未完成", error.message ?: "请重试")
-    internal fun toast(message: String) { Toast.makeText(this, message, Toast.LENGTH_SHORT).show() }
-    internal fun alert(title: String, message: String) { panelDialog(title, message) }
-    internal fun confirm(title: String, message: String, confirm: String = "确认", onYes: () -> Unit) {
-        panelDialog(title, message, confirm, "取消", positiveAction = onYes)
+    override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(code, permissions, grantResults)
+        SleepService.update()
     }
+    @Deprecated("Back is routed through the page's own history")
+    override fun onBackPressed() {
+        if (!pageReady) { leave(); return }
+        web.evaluateJavascript("window.app&&app.back()") { handled -> if (handled != "true") leave() }
+    }
+    @Suppress("DEPRECATION")
+    internal fun leave() { if (!restRunning()) super.onBackPressed() }
+
+    // ---- system pickers ----
+    internal fun openUrl(url: String) { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
     internal fun importFile() {
         startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("application/json").addCategory(Intent.CATEGORY_OPENABLE), 21)
     }
-    internal fun saveFile(name: String, type: String, text: String? = null, date: String? = null) {
-        exportText = text
+    internal fun saveFile(name: String, type: String, date: String? = null) {
         exportTimelineDate = date
-        startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).setType(type).addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE, name), if (type == "application/json") 22 else 23)
+        startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).setType(type).addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE, name),
+            if (type == "application/json") 22 else 23)
     }
     internal fun openPhoto() { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE), 24) }
+    private fun failed(error: Throwable) = emit("error", json("title" to "操作未完成", "message" to (error.message ?: "请重试")))
     @Deprecated("System file picker result")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        val uri = data?.data ?: return
-        if (resultCode != RESULT_OK) return
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null) { if (requestCode == 24) emit("photo", null); return }
         when (requestCode) {
-            21 -> background({
-                val text = contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: error("无法读取文件")
-                Backup.import(store, text)
-            }) {
-                it.onSuccess {
-                    importVisible = true
-                    chat.reload()
-                    dismissOverlays(false)
-                    screen = null
-                    back.clear()
-                    tab = 0
-                    render()
-                    enterReadyState(startService = true)
-                    if (config.invalidKeys().isNotEmpty()) toast("导入完成，部分评分参数已使用默认值")
-                    else toast("旧版备份已导入")
-                }.onFailure(::showError)
+            21 -> files.execute {
+                runCatching {
+                    val text = contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: error("无法读取文件")
+                    Backup.import(store, text)
+                }.onSuccess {
+                    handler.post {
+                        bridge.cancelStream()
+                        applyTheme()
+                        enterReady()
+                        emit("imported", json("invalid" to config.invalidKeys().isNotEmpty()))
+                    }
+                }.onFailure(::failed)
             }
             22, 23 -> {
-                val savedText = exportText
                 val date = exportTimelineDate
-                background({
-                    val text = if (requestCode == 22) Backup.export(store) else savedText ?: date?.let { timelineData(it).export() } ?: error("请重新打开时间轴导出")
-                    contentResolver.openOutputStream(uri, "wt")?.bufferedWriter(Charsets.UTF_8)?.use { it.write(text) } ?: error("无法写入文件")
-                }) { it.onSuccess { toast("导出完成") }.onFailure(::showError) }
+                files.execute {
+                    runCatching {
+                        val text = if (requestCode == 22) Backup.export(store)
+                        else timelineData(store, packageManager, date ?: error("请重新打开时间轴导出")).export()
+                        contentResolver.openOutputStream(uri, "wt")?.bufferedWriter(Charsets.UTF_8)?.use { it.write(text) } ?: error("无法写入文件")
+                    }.onSuccess { emit("toast", "导出完成") }.onFailure(::failed)
+                }
             }
-            24 -> chat.acceptPhoto(uri)
+            24 -> bridge.acceptPhoto(uri)
         }
     }
-    internal fun openUrl(url: String) { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+    internal fun toast(message: String) { Toast.makeText(this, message, Toast.LENGTH_SHORT).show() }
 }

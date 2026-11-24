@@ -31,6 +31,15 @@ internal fun newConversation(s: JSONObject, subType: String = "", title: String?
         "aiEnabled" to (subType != "SELF_CHAT"), "assistantBackup" to JSONArray(), "showMessageTime" to true, "isCompleted" to false)
 }
 internal fun JSONObject.roles() = list("roles")
+/** System message for a role's own prompt; names the role so several prompts in one chat stay distinguishable. */
+internal fun rolePrompt(role: JSONObject): String {
+    val kind = when (role.text("type", "user")) { "assistant" -> "助手"; "system" -> "系统"; else -> "用户" }
+    return "以下是角色「${role.text("name")}」（$kind）的设定：\n${role.text("prompt").trim()}"
+}
+internal fun JSONObject.setRolePrompt(name: String, prompt: String) {
+    val role = roles().firstOrNull { it.text("name") == name } ?: error("找不到角色")
+    if (prompt.isBlank()) role.remove("prompt") else role.put("prompt", prompt.trim())
+}
 internal fun JSONObject.taskChat() = text("type") == "TASK"
 internal fun JSONObject.assistant() = roles().firstOrNull { it.text("type") == "assistant" && it.optBoolean("isActive") && !it.optBoolean("archived") }
     ?: roles().firstOrNull { it.text("type") == "assistant" && !it.optBoolean("archived") }
@@ -179,6 +188,10 @@ internal class Chats(private val store: Store, private val catalog: Catalog) {
         val messages = JSONArray()
         if (chat.taskChat() && chat.text("systemPrompt").isNotBlank()) {
             messages.put(json("role" to "system", "content" to chat.text("systemPrompt")))
+        }
+        // Role prompts: every role still in this conversation (not archived) sends its own setting as a system message.
+        chat.roles().filter { !it.optBoolean("archived") && it.text("prompt").isNotBlank() }.forEach {
+            messages.put(json("role" to "system", "content" to rolePrompt(it)))
         }
         val roles = chat.roles().associate { it.text("name") to it.text("type", "user") }
         chat.list("messages").forEach {

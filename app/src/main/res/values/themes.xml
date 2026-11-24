@@ -1,13 +1,13 @@
 <resources>
-    <!-- Light starting window; values-night swaps it. On API 31+ the app hands its own theme setting
-         to the system, so this matches the in-app choice instead of flashing the other scheme. -->
-    <style name="Theme.睡时记录" parent="android:style/Theme.Material.Light.NoActionBar">
+    <!-- One starting theme for both app themes: the page decides light or dark once it runs, but the first frames
+         are always the night sky the launch image and page are drawn on, so nothing flashes white. -->
+    <style name="Theme.睡时记录" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
-        <item name="android:colorAccent">#4152C7</item>
-        <item name="android:windowBackground">#F4F5F9</item>
+        <item name="android:colorAccent">#B0BCFF</item>
+        <item name="android:windowBackground">@drawable/launch_sky</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>
 </resources>

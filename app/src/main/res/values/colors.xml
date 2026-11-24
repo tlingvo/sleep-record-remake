@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ink">#151926</color>
-    <color name="night">#0D0F17</color>
+    <color name="night">#05060C</color>
+    <color name="sky_top">#0F1534</color>
+    <color name="sky_mid">#090C1C</color>
 </resources>
