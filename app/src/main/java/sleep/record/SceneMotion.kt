@@ -183,8 +183,8 @@ internal class OverlayHost(private val a: MainActivity) : FrameLayout(a) {
             active.translationY = 0f
             scrim?.alpha = .55f
         }
-        active.background = a.shape(a.palette.surface, 27, a.palette.stroke).apply {
-            val r = a.dp(27).toFloat()
+        active.background = a.shape(a.palette.surface, 28, a.palette.outline).apply {
+            val r = a.dp(28).toFloat()
             cornerRadii = if (side) floatArrayOf(0f,0f,r,r,r,r,0f,0f) else floatArrayOf(r,r,r,r,0f,0f,0f,0f)
         }
         active.removeAllViews()
@@ -204,16 +204,20 @@ internal class OverlayHost(private val a: MainActivity) : FrameLayout(a) {
         variant == "chat-settings" -> available * 96 / 100
         else -> min(available * 86 / 100, a.dp(690))
     }
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        super.onSizeChanged(w, h, oldw, oldh)
-        if (w <= 0 || h <= 0) return
-        val active = panel ?: return
-        val horizontalInset = paddingLeft + paddingRight
-        val verticalInset = paddingTop + paddingBottom
-        val params = active.layoutParams as LayoutParams
-        params.width = if (drawer) min(((w - horizontalInset) * .87f).toInt(), a.dp(378)) else min(w - horizontalInset, a.dp(600))
-        params.height = if (drawer) -1 else sheetHeight(h - verticalInset)
-        active.layoutParams = params
+    /**
+     * Sizes the sheet inside the same measure pass that delivers the new height. Updating it from
+     * onSizeChanged lands one layout late, so when the keyboard opens the old, taller sheet is laid
+     * out bottom-aligned in the shrunken space and its top (title, input field) slides off screen.
+     */
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val w = MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight
+        val h = MeasureSpec.getSize(heightMeasureSpec) - paddingTop - paddingBottom
+        val params = panel?.layoutParams as? LayoutParams
+        if (params != null && w > 0 && h > 0) {
+            params.width = if (drawer) min((w * .87f).toInt(), a.dp(378)) else min(w, a.dp(600))
+            params.height = if (drawer) -1 else sheetHeight(h)
+        }
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
     }
     fun hide(animated: Boolean = true) {
         val active = panel ?: return

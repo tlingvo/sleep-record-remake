@@ -13,13 +13,26 @@ internal fun MainActivity.renderTasks() {
     val (start, end) = config.window(today)
     val bonus = store.hours(start, end).sumOf { it.bonus.toLong() }
     title("任务", subtitle = "今日加分 ${signed(bonus)}")
-    val tabs = vertical().apply { setPadding(dp(18), 0, dp(18), dp(7)) }
-    segments(tabs, listOf("常规", "挑战", "一次性"), taskTab) { selectTaskSection(it) }
+    val tabs = vertical().apply { setPadding(dp(18), 0, dp(18), dp(6)) }
+    segments(tabs, listOf("常规", "挑战", "一次性"), taskTab, from = sectionFrom) { selectTaskSection(it) }
+    sectionFrom = taskTab
     body.addView(tabs)
     val content = scroller(body)
+    // Header and tabs stay put; only the section content moves, in the direction of the chosen tab.
+    if (sectionSlide != 0 && motionEnabled()) {
+        content.translationX = sectionSlide * dp(56).toFloat()
+        content.alpha = 0f
+        content.animate().translationX(0f).alpha(1f).setDuration(260).setInterpolator(settle).start()
+    }
+    sectionSlide = 0
     val cycle = store.overview(ms).lastOrNull()
     val simulation = if (cycle == null || cycle.max <= cycle.min) "N/A" else "${signed((cycle.percent(cycle.net + 100) - cycle.percent()).toLong())} 个百分点"
-    content.label("额外 +100 分对当前周期的影响  $simulation", 12, palette.muted, gap = 4)
+    content.addView(row().apply {
+        setPadding(dp(14), dp(10), dp(14), dp(10))
+        background = shape(palette.raised.withOpacity(if (palette.dark) 0x99 else 0xFF), 14)
+        addView(text("额外 +100 分对当前周期的影响", TypeScale.CAPTION, palette.muted), LinearLayout.LayoutParams(0, -2, 1f))
+        addView(text(simulation, TypeScale.CAPTION, palette.text, true).numeric())
+    }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
     when (taskTab) {
         0 -> regularTasks(content, s, ms)
         1 -> challengeTasks(content, s)
@@ -28,14 +41,18 @@ internal fun MainActivity.renderTasks() {
 }
 private fun MainActivity.taskCard(parent: LinearLayout, title: String, description: String, points: String = ""): LinearLayout {
     val card = parent.card()
-    val heading = row()
-    heading.addView(text(title, 16, palette.text, true), LinearLayout.LayoutParams(0, -2, 1f))
-    if (points.isNotBlank()) heading.addView(text(points, 12, if (points.startsWith("−")) palette.red else palette.green, true).apply {
-        background = shape(palette.raised, 11)
-        setPadding(dp(9), dp(6), dp(9), dp(6))
-    })
+    val heading = row().apply { gravity = Gravity.TOP }
+    heading.addView(text(title, TypeScale.TITLE, palette.text, true), LinearLayout.LayoutParams(0, -2, 1f))
+    if (points.isNotBlank()) {
+        val tint = when {
+            points.startsWith("−") || points.startsWith("-") -> palette.red
+            points.startsWith("+") -> palette.green
+            else -> palette.muted
+        }
+        heading.addView(chip(points, tint), LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(10) })
+    }
     card.addView(heading)
-    if (description.isNotBlank()) card.label(description, 13, palette.muted, gap = 5)
+    if (description.isNotBlank()) card.label(description, TypeScale.LABEL, palette.muted, gap = 6)
     return card
 }
 private fun MainActivity.regularTasks(content: LinearLayout, s: JSONObject, ms: Long) {
@@ -125,7 +142,10 @@ private fun MainActivity.oneTimeTasks(content: LinearLayout, s: JSONObject) {
     val completed = s.array("completed_tasks").strings().toSet()
     val used = tasks.count(s)
     content.card().apply {
-        label("今日完成 $used / 5", 16, bold = true)
+        val head = row()
+        head.addView(text("今日完成", TypeScale.TITLE, palette.text, true), LinearLayout.LayoutParams(0, -2, 1f))
+        head.addView(text("$used / 5", TypeScale.TITLE, palette.accent, true).numeric())
+        addView(head)
         progress(this, 5, used)
     }
     val done = catalog.oneTime.filter { it.text("id") in completed }
@@ -146,51 +166,52 @@ internal fun MainActivity.renderQuestion(name: String) {
         scroller(body).card().apply { label(name); action("退出") { closePage() } }
         return
     }
-    val head = row().apply { setPadding(dp(18), dp(12), dp(18), dp(12)); minimumHeight = dp(66) }
+    val head = row().apply { setPadding(dp(8), dp(10), dp(20), dp(10)); minimumHeight = dp(64) }
     if (node.optBoolean("showCloseButton", true)) head.addView(iconButton(Glyph.CLOSE, "关闭") { closePage() },
-        LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginEnd = dp(12) })
-    head.addView(text(if (notice) "睡时记录" else "任务与说明", 19, palette.text, true), LinearLayout.LayoutParams(0, -2, 1f))
+        LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginEnd = dp(4) })
+    else head.setPadding(dp(20), dp(10), dp(20), dp(10))
+    head.addView(text(if (notice) "睡时记录" else "任务与说明", TypeScale.TITLE, palette.text, true), LinearLayout.LayoutParams(0, -2, 1f))
     body.addView(head)
     val content = scroller(body)
     if (notice) content.addView(MoonArt(this), LinearLayout.LayoutParams(-1, dp(115)))
     val card = content.card()
     val type = node.text("type")
     val kicker = when (type) { "QUIZ" -> "选择题"; "ENDING" -> "结局"; else -> if (notice) "初次使用" else "阅读" }
-    card.label(kicker, 12, palette.accent, bold = true)
-    card.label(node.text("title", name), 28, bold = true, gap = 7)
+    card.label(kicker, TypeScale.CAPTION, palette.accent, bold = true)
+    card.label(node.text("title", name), 26, bold = true, gap = 7)
     if (node.optBoolean("showProgressBar")) {
         val mark = (node.optDouble("progressRatio", 0.0) * 100).toInt().coerceIn(0, 100)
-        card.label("进度 $mark%", 12, palette.muted, gap = 13)
-        progress(card, 100, mark)
+        card.label("进度 $mark%", TypeScale.CAPTION, palette.muted, gap = 13).numeric()
+        progress(card, 100, mark).apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(8) }
     }
     val info = if (name == "用户须知main" && BuildConfig.PUBLIC_CHAT_KEY.isBlank())
         node.text("infoText").replace("默认使用内置的公开低额度 AI 服务（Catbee）", "AI 对话需在设置中填写 API 密钥") else node.text("infoText")
-    if (info.isNotBlank()) card.label(info, 16, palette.muted, gap = 13)
+    if (info.isNotBlank()) card.label(info, 16, palette.text.withOpacity(0xCC), gap = 13)
     when (type) {
         "INFO" -> card.action("继续", primary = true) { advanceQuestion(node.text("linkedQuestionName")) }
         "QUIZ" -> {
-            card.label(node.text("question"), 16, gap = 13)
+            card.label(node.text("question"), 16, bold = true, gap = 13)
             val options = node.list("options")
-            val choiceList = content.card()
+            val choiceList = content.card().apply { setPadding(dp(8), dp(8), dp(8), dp(8)) }
             options.forEachIndexed { i, option ->
                 val chosen = questionSelection == i
                 val answer = row().apply {
                     minimumHeight = dp(56); isSelected = chosen
-                    setPadding(dp(7), dp(7), dp(8), dp(7))
+                    setPadding(dp(10), dp(8), dp(12), dp(8))
                 }
-                val badge = text(('A' + i).toString(), 13, if (chosen) palette.onAccent else palette.accent, true).apply {
-                    gravity = Gravity.CENTER; background = shape(if (chosen) palette.accent else palette.raised, 10)
+                val badge = text(('A' + i).toString(), TypeScale.LABEL, if (chosen) palette.onAccent else palette.muted, true).apply {
+                    gravity = Gravity.CENTER; background = shape(if (chosen) palette.accent else palette.raised, 16)
                 }
-                answer.addView(badge, LinearLayout.LayoutParams(dp(32), dp(32)).apply { marginEnd = dp(11) })
-                answer.addView(text(option.text("text"), 15, palette.text, chosen), LinearLayout.LayoutParams(0, -2, 1f))
+                answer.addView(badge, LinearLayout.LayoutParams(dp(32), dp(32)).apply { marginEnd = dp(12) })
+                answer.addView(text(option.text("text"), TypeScale.BODY, palette.text, chosen), LinearLayout.LayoutParams(0, -2, 1f))
                 if (chosen) answer.addView(GlyphView(this, Glyph.CHECK, palette.accent), LinearLayout.LayoutParams(dp(24), dp(24)))
-                clickable(answer, if (chosen) palette.raised else android.graphics.Color.TRANSPARENT, 14) {
+                clickable(answer, if (chosen) palette.accentSoft else android.graphics.Color.TRANSPARENT, 14) {
                     if (option.text("type") == "ERROR") alert("再试一次", option.text("errorMessage", "请重新选择"))
                     else { questionSelection = i; render() }
                 }
-                choiceList.addView(answer, LinearLayout.LayoutParams(-1, -2).apply { if (i > 0) topMargin = dp(4) })
+                choiceList.addView(answer, LinearLayout.LayoutParams(-1, -2).apply { if (i > 0) topMargin = dp(2) })
             }
-            val footer = vertical().apply { setPadding(dp(19), 0, dp(19), dp(14)) }
+            val footer = vertical().apply { setPadding(dp(20), 0, dp(20), dp(16)) }
             footer.action("确认", true, questionSelection >= 0) {
                 options.getOrNull(questionSelection)?.let { advanceQuestion(it.text("linkedQuestionName")) }
             }
@@ -243,10 +264,14 @@ internal fun MainActivity.renderRest() {
     val content = scroller(body)
     val card = content.card()
     card.addView(MoonArt(this), LinearLayout.LayoutParams(-1, dp(155)))
-    card.label(if (completed) "休息完成" else "放下手机，休息一下", 24, bold = true).gravity = Gravity.CENTER
-    val timer = card.label(if (completed) "${signed(display.points.toLong())} 分" else mmss(display.seconds), 46,
-        if (completed) palette.green else palette.accent, gap = 9).apply { gravity = Gravity.CENTER }
-    card.label(if (completed) "奖励已记入当前小时" else if (running) "计时中 · 可关闭屏幕" else "准备好后开始计时", 13, palette.muted, gap = 7).gravity = Gravity.CENTER
+    card.label(if (completed) "休息完成" else "放下手机，休息一下", 22, bold = true).gravity = Gravity.CENTER
+    val timer = card.label(if (completed) "${signed(display.points.toLong())} 分" else mmss(display.seconds), 48,
+        if (completed) palette.green else palette.text, gap = 9).apply {
+        gravity = Gravity.CENTER
+        typeface = android.graphics.Typeface.create("sans-serif-light", android.graphics.Typeface.NORMAL)
+        numeric()
+    }
+    card.label(if (completed) "奖励已记入当前小时" else if (running) "计时中 · 可关闭屏幕" else "准备好后开始计时", TypeScale.LABEL, palette.muted, gap = 7).gravity = Gravity.CENTER
     if (completed) card.action("返回", true) { closePage() } else if (!running) card.action("开始计时", true) {
         rest = tasks.startRest(selected)
         syncRestLockTask()

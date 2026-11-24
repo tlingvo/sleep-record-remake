@@ -86,6 +86,10 @@ class MainActivity : Activity() {
             window.statusBarColor = Color.TRANSPARENT
             if (Build.VERSION.SDK_INT >= 30) window.navigationBarColor = Color.TRANSPARENT
         }
+        if (Build.VERSION.SDK_INT >= 29) {
+            window.isNavigationBarContrastEnforced = false
+            window.isStatusBarContrastEnforced = false
+        }
         tab = savedInstanceState?.getInt("tab") ?: 0
         permissionAsked = savedInstanceState?.getBoolean("permissionAsked") ?: false
         exportTimelineDate = savedInstanceState?.getString("timelineExport")
@@ -178,6 +182,7 @@ class MainActivity : Activity() {
             val previous = overlayPage
             if (previous == next) return
             previous?.let(overlayBack::addLast)
+            overlayOffsets.remove("${next.type}:${next.arg}")
             overlayPage = next
             renderOverlay(fresh = previous == null)
             return
@@ -243,11 +248,16 @@ class MainActivity : Activity() {
         }
         if (ready()) SleepService.syncFromActivity(this)
     }
+    /** Previous task section, so the segmented highlight can slide from it; equals [taskTab] when settled. */
+    internal var sectionFrom = 0
+    /** Direction the next task-section content slides in from: 1 = right, -1 = left, 0 = no slide. */
+    internal var sectionSlide = 0
     internal fun selectTaskSection(index: Int) {
         if (taskTab == index) return
-        val before = taskTab
+        sectionFrom = taskTab
+        sectionSlide = if (index > taskTab) 1 else -1
         taskTab = index
-        renderScene(if (index > before) Motion.SECTION_LEFT else Motion.SECTION_RIGHT)
+        renderScene()
     }
     internal fun nextQuestion(next: String) {
         if (screen?.type != "question" || catalog.questions[next] == null) return
@@ -256,7 +266,8 @@ class MainActivity : Activity() {
         renderScene(Motion.QUIZ)
     }
     internal fun scrollTarget(view: ScrollView, parent: LinearLayout) {
-        if (!renderingOverlay && parent === body && !(screen == null && tab == 1)) lastScroll = view
+        if (renderingOverlay) { if (parent === body && overlayScroll == null) overlayScroll = view; return }
+        if (parent === body && !(screen == null && tab == 1)) lastScroll = view
     }
     private fun savedScroll() {
         lastScroll?.let { scrollOffsets[renderedKey] = it.scrollY }
@@ -316,6 +327,19 @@ class MainActivity : Activity() {
     }
     internal fun repaintChat() = renderScene()
     internal fun render() = if (overlayPage == null) renderScene() else renderOverlay()
+    private var appliedNightMode = -1
+    /** Hands the in-app theme to the system (API 31+) so the starting window and system dialogs match it. */
+    private fun syncNightMode(setting: Int) {
+        if (Build.VERSION.SDK_INT < 31) return
+        val mode = when (setting) {
+            1 -> android.app.UiModeManager.MODE_NIGHT_YES
+            2 -> android.app.UiModeManager.MODE_NIGHT_NO
+            else -> android.app.UiModeManager.MODE_NIGHT_AUTO
+        }
+        if (mode == appliedNightMode) return
+        appliedNightMode = mode
+        runCatching { getSystemService(android.app.UiModeManager::class.java).setApplicationNightMode(mode) }
+    }
     private fun renderScene(motion: Motion = Motion.NONE, after: (() -> Unit)? = null) {
         renderTick?.let(handler::removeCallbacks)
         renderTick = null
@@ -323,7 +347,9 @@ class MainActivity : Activity() {
         val newPalette = Palette.forMode(config.number("darkMode"), resources.configuration)
         val restyleOverlay = ::palette.isInitialized && newPalette != palette
         palette = newPalette
+        syncNightMode(config.number("darkMode"))
         shell.setBackgroundColor(palette.bg)
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(palette.bg))
         if (Build.VERSION.SDK_INT >= 30) {
             window.insetsController?.setSystemBarsAppearance(
                 if (palette.dark) 0 else WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
@@ -352,7 +378,7 @@ class MainActivity : Activity() {
             tab == 2 -> renderTasks()
             else -> renderSettings()
         }
-        lastScroll?.let { scroll -> scrollOffsets[renderedKey]?.let { y -> scroll.post { scroll.scrollTo(0, y) } } }
+        lastScroll?.let { scroll -> scrollOffsets[renderedKey]?.let { y -> restoreScroll(scroll, y) } }
         scene.show(body, motion, after)
         handler.postDelayed({ invalidateNavBackdrop() }, if (motion == Motion.NONE) 40L else 380L)
         if (ready() && page == null && navSignature != (tab to palette)) {
@@ -370,10 +396,18 @@ class MainActivity : Activity() {
         }
     }
     private var renderingOverlay = false
+    private var overlayScroll: ScrollView? = null
+    private val overlayOffsets = mutableMapOf<String, Int>()
+    private var overlayKey: String? = null
     private fun renderOverlay(fresh: Boolean = false) {
         val page = overlayPage ?: return
         renderTick?.let(handler::removeCallbacks)
         renderTick = null
+        val key = "${page.type}:${page.arg}"
+        overlayScroll?.let { previous -> overlayKey?.let { overlayOffsets[it] = previous.scrollY } }
+        overlayScroll = null
+        if (fresh) overlayOffsets.clear()
+        overlayKey = key
         val beneath = body
         val panel = vertical().apply { isFocusableInTouchMode = true }
         body = panel
@@ -381,8 +415,8 @@ class MainActivity : Activity() {
         try {
             if (page.type != "chat-drawer") body.addView(vertical().apply {
                 gravity = android.view.Gravity.CENTER
-                addView(View(this@MainActivity).apply { background = shape(palette.stroke, 10) }, LinearLayout.LayoutParams(dp(36), dp(4)))
-            }, LinearLayout.LayoutParams(-1, dp(17)))
+                addView(View(this@MainActivity).apply { background = shape(palette.muted.withOpacity(0x66), 10) }, LinearLayout.LayoutParams(dp(32), dp(4)))
+            }, LinearLayout.LayoutParams(-1, dp(20)))
             when (page.type) {
                 "chat-drawer" -> chat.drawer()
                 "chat-settings" -> chat.settings()
@@ -396,6 +430,7 @@ class MainActivity : Activity() {
             body = beneath
             renderingOverlay = false
         }
+        overlayScroll?.let { scroll -> overlayOffsets[key]?.let { y -> restoreScroll(scroll, y) } }
         floating.show(panel, page, fresh)
     }
     private fun usageGate() {

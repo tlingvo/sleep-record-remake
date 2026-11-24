@@ -10,15 +10,15 @@ private fun MainActivity.choice(parent: LinearLayout, label: String, key: String
     }
 }
 internal fun MainActivity.renderSettings() {
-    title("设置", subtitle = "外观 · 计分 · 本地数据")
+    title("设置")
     val content = scroller(body)
     val c = config
-    val appearance = content.card(gap = 2)
-    appearance.label("外观", 16, bold = true)
+    section(content, "外观")
+    val appearance = content.listCard()
     choice(appearance, "主题", "darkMode", listOf("0", "1", "2"), listOf("跟随系统", "深色", "浅色"))
     switch(appearance, "显示聊天头像", store.state().optBoolean("show_avatars", true)) { show -> store.edit { it.put("show_avatars", show) } }
-    val schedules = content.card()
-    schedules.label("计分时段", 16, bold = true)
+    section(content, "计分时段")
+    val schedules = content.listCard()
     choice(schedules, "周期长度", "cycleLengthDays", listOf("1", "3", "4", "5"), listOf("1 天", "3 天", "4 天", "5 天"))
     for ((label, key, hours) in listOf(
         Triple("每日起始", "dayStartHour", listOf(0, 1, 3, 4, 5)),
@@ -28,20 +28,21 @@ internal fun MainActivity.renderSettings() {
         val options = (hours + c.number(key)).distinct()
         choice(schedules, label, key, options.map(Int::toString), options.map(::clockHour))
     }
-    val reminders = content.card()
-    reminders.label("通知", 16, bold = true)
+    section(content, "通知")
+    val reminders = content.listCard()
     switch(reminders, "显示扣分率", c.flag("showPenaltyNotification")) { applySettings(mapOf("showPenaltyNotification" to it.toString()), repaint = false) }
     switch(reminders, "提醒睡觉时间", c.flag("showSleepTimeNotification")) { applySettings(mapOf("showSleepTimeNotification" to it.toString()), repaint = false) }
-    val chat = content.card()
-    chat.label("AI 对话", 16, bold = true)
+    section(content, "AI 对话")
+    val chat = content.listCard()
     choice(chat, "模型", "chatModel", listOf(Config.defaults.getValue("chatModel").toString()))
-    val data = content.card()
-    data.label("本地数据", 16, bold = true)
+    section(content, "本地数据")
+    val data = content.listCard()
     entry(data, "导出备份") {
         confirm("导出备份", "备份包含使用历史、会话内容及 API 密钥。请选择妥善保管的位置。", "选择位置") { saveFile("sleep_score_export.json", "application/json") }
     }
     entry(data, "导入旧版备份") { importFile() }
-    val advanced = content.card()
+    section(content, "高级")
+    val advanced = content.listCard()
     entry(advanced, "隐藏开发者选项", if (c.flag("summaryMode")) "已隐藏" else "已显示") {
         if (!c.flag("summaryMode")) applySettings(mapOf("summaryMode" to "true"))
         else inputDialog("显示开发者选项", hint = "输入 我确认 或 我确定") { value ->
@@ -66,7 +67,7 @@ internal fun MainActivity.renderDeveloper() {
     title("开发者选项", back = true)
     val content = scroller(body)
     val c = config
-    val toggles = content.card()
+    val toggles = content.listCard(gap = 4)
     val switches = mapOf("showDebugInfo" to "显示统计调试信息", "hideDetail" to "隐藏详情", "usePercentageScoring" to "使用百分比计分", "ignoreDesktopApps" to "忽略桌面应用（兼容）")
     switches.forEach { (key, label) ->
         val field = switch(toggles, label, c.flag(key)) { }
@@ -86,15 +87,20 @@ internal fun MainActivity.renderDeveloper() {
     }
     save["showDebugTasks"] = { debug.isChecked().toString() }
     for ((name, fields) in developerParameters) {
-        val card = content.card()
-        val group = vertical().apply { visibility = android.view.View.GONE }
-        entry(card, name, "展开") { group.visibility = if (group.visibility == android.view.View.VISIBLE) android.view.View.GONE else android.view.View.VISIBLE }
+        val card = content.card().apply { setPadding(dp(18), dp(4), dp(14), dp(4)) }
+        val group = vertical().apply { visibility = android.view.View.GONE; setPadding(0, 0, dp(4), dp(16)) }
+        lateinit var toggle: android.view.View
+        toggle = entry(card, name, "展开") {
+            val open = group.visibility != android.view.View.VISIBLE
+            group.visibility = if (open) android.view.View.VISIBLE else android.view.View.GONE
+            ((toggle as LinearLayout).getChildAt(1) as? android.widget.TextView)?.text = if (open) "收起" else "展开"
+        }
         fields.forEach { (key, label) ->
-            group.label(label, 13, palette.muted, gap = 9)
+            group.label(label, TypeScale.CAPTION, palette.muted, gap = 12)
             val field = input(c.raw(key), label)
             if (key == "chatApiKey") field.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
             if (Config.defaults[key] is Number) field.inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
-            group.addView(field)
+            group.addView(field, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
             save[key] = { field.text.toString().trim() }
         }
         card.addView(group)
@@ -107,17 +113,17 @@ internal fun MainActivity.renderDeveloper() {
             tasks.reset(); toast("任务状态已重置"); render()
         }
     }
-    val footer = vertical().apply { setPadding(dp(18), 0, dp(18), dp(12)) }
+    val footer = vertical().apply { setPadding(dp(20), 0, dp(20), dp(14)) }
     footer.action("保存并应用", primary = true) { applySettings(save.mapValues { it.value() }); toast("设置已保存") }
     body.addView(footer)
 }
 internal fun MainActivity.renderDetails() {
     title("详情", back = true)
     val content = scroller(body)
-    val card = content.card()
-    card.label("按自定义日查询时间轴", 16, bold = true)
+    val card = content.card(gap = 4)
+    card.label("按自定义日查询时间轴", TypeScale.TITLE, bold = true)
     val field = input(config.date(), "yyyy-MM-dd")
-    card.addView(field, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(9) })
+    card.addView(field, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
     card.action("查看时间轴", primary = true) {
         val date = field.text.toString().trim()
         dateStart(date)
@@ -125,7 +131,7 @@ internal fun MainActivity.renderDetails() {
     }
     if (config.flag("showDebugTasks")) {
         section(content, "调试题目入口")
-        val all = content.card()
+        val all = content.listCard()
         catalog.index.strings().forEach { key -> entry(all, key) { open(Screen("question", key)) } }
     }
 }

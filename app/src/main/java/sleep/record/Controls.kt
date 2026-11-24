@@ -29,30 +29,32 @@ internal class NavDock(private val a: MainActivity, private val from: Int, val i
     private val backdrop: BackdropBlurView
     private val indicator = View(a).apply {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        background = a.shape(a.palette.raised, 16, a.palette.stroke)
+        background = a.shape(a.palette.accentSoft, 15)
     }
     private var laidOut = false
     init {
-        val gap = a.dp(13)
+        val gap = a.dp(14)
         val frame = FrameLayout(a).apply {
-            backdrop = BackdropBlurView(a, a.navBackdropSource, blurRadius = a.dp(7).toFloat(),
-                tint = a.palette.bg.withOpacity(0x40))
+            backdrop = BackdropBlurView(a, a.navBackdropSource, cornerRadius = 28, blurRadius = a.dp(8).toFloat(),
+                tint = a.palette.surface.withOpacity(if (a.palette.dark) 0x9A else 0xB8),
+                fallbackTint = a.palette.surface.withOpacity(0xF2))
             addView(backdrop, LayoutParams(-1, -1))
-            foreground = a.shape(Color.TRANSPARENT, 24, a.palette.stroke)
+            foreground = a.shape(Color.TRANSPARENT, 28, a.palette.stroke.withOpacity(if (a.palette.dark) 0xC0 else 0xFF))
         }
         addView(frame, LayoutParams(-1, a.dp(66)).apply { setMargins(gap, a.dp(5), gap, a.dp(8)) })
-        frame.addView(indicator, LayoutParams(a.dp(52), a.dp(29), Gravity.TOP or Gravity.START).apply { topMargin = a.dp(8) })
+        frame.addView(indicator, LayoutParams(a.dp(56), a.dp(30), Gravity.TOP or Gravity.START).apply { topMargin = a.dp(7) })
         val line = a.row()
         frame.addView(line, LayoutParams(-1, -1))
         listOf("统计", "不想睡觉", "任务", "设置").forEachIndexed { i, name ->
             val item = a.vertical().apply {
                 gravity = Gravity.CENTER_HORIZONTAL
-                setPadding(0, a.dp(12), 0, 0)
+                setPadding(0, a.dp(11), 0, 0)
                 isSelected = i == index
+                contentDescription = name
             }
-            item.addView(NavIcon(a, i, if (i == index) a.palette.accent else a.palette.muted), LinearLayout.LayoutParams(a.dp(21), a.dp(21)))
-            item.addView(a.text(name, 11, if (i == index) a.palette.text else a.palette.muted, i == index), LinearLayout.LayoutParams(-2, -2).apply { topMargin = a.dp(6) })
-            a.clickable(item, Color.TRANSPARENT, 18) { if (i != index) a.selectTab(i) }
+            item.addView(NavIcon(a, i, if (i == index) a.palette.accent else a.palette.muted), LinearLayout.LayoutParams(a.dp(22), a.dp(22)))
+            item.addView(a.text(name, 11, if (i == index) a.palette.text else a.palette.muted, true), LinearLayout.LayoutParams(-2, -2).apply { topMargin = a.dp(6) })
+            a.clickable(item, Color.TRANSPARENT, 24) { if (i != index) a.selectTab(i) }
             line.addView(item, LinearLayout.LayoutParams(0, -1, 1f))
         }
         frame.addOnLayoutChangeListener { _, left, _, right, _, oldLeft, _, oldRight, _ ->
@@ -123,18 +125,19 @@ internal class BackdropBlurView(context: Context, private val source: View,
     }
 }
 
-internal enum class Glyph { DOWN, BACK, CLOSE, MENU, CHECK, MORE, INFO, REFRESH, SEND }
+internal enum class Glyph { DOWN, NEXT, BACK, CLOSE, MENU, CHECK, MORE, INFO, REFRESH, SEND }
 internal class GlyphView(context: Context, private val glyph: Glyph, private val tint: Int) : View(context) {
     private val ink = Paint(Paint.ANTI_ALIAS_FLAG)
     override fun onDraw(c: Canvas) {
         c.save()
         c.translate(width / 2f, height / 2f)
-        val size = minOf(width, height, context.dp(21)) / 24f
+        val size = minOf(width, height, context.dp(22)) / 24f
         c.scale(size, size)
-        ink.color = tint; ink.strokeWidth = 1.8f; ink.strokeCap = Paint.Cap.ROUND
+        ink.color = tint; ink.strokeWidth = 1.9f; ink.strokeCap = Paint.Cap.ROUND; ink.strokeJoin = Paint.Join.ROUND
         fun l(x: Float, y: Float, x2: Float, y2: Float) = c.drawLine(x, y, x2, y2, ink)
         when (glyph) {
             Glyph.DOWN -> { l(-4f, -2f, 0f, 2f); l(0f, 2f, 4f, -2f) }
+            Glyph.NEXT -> { l(-1.5f, -4.5f, 2.5f, 0f); l(2.5f, 0f, -1.5f, 4.5f) }
             Glyph.BACK -> { l(-6f, 0f, 6f, 0f); l(-6f, 0f, -1f, -5f); l(-6f, 0f, -1f, 5f) }
             Glyph.CLOSE -> { l(-4.5f, -4.5f, 4.5f, 4.5f); l(4.5f, -4.5f, -4.5f, 4.5f) }
             Glyph.MENU -> { l(-6.5f, -5f, 6.5f, -5f); l(-6.5f, 0f, 6.5f, 0f); l(-6.5f, 5f, 3f, 5f) }
@@ -164,10 +167,11 @@ internal class GlyphView(context: Context, private val glyph: Glyph, private val
         c.restore()
     }
 }
-internal fun MainActivity.iconButton(glyph: Glyph, description: String, fill: Int = palette.raised, onClick: () -> Unit) = GlyphView(this, glyph, palette.accent).apply {
+internal fun MainActivity.iconButton(glyph: Glyph, description: String, fill: Int = Color.TRANSPARENT, tint: Int = palette.text,
+                                     onClick: () -> Unit) = GlyphView(this, glyph, tint).apply {
     minimumHeight = dp(44); minimumWidth = dp(44)
     contentDescription = description
-    clickable(this, fill, 15, onClick)
+    clickable(this, fill, 24, onClick)
     accessibilityDelegate = object : View.AccessibilityDelegate() {
         override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfo) {
             super.onInitializeAccessibilityNodeInfo(host, info); info.className = "android.widget.Button"
@@ -184,20 +188,23 @@ internal class ToggleControl(private val a: MainActivity, label: String, value: 
     private val indicator = object : View(a) {
         private val pen = Paint(Paint.ANTI_ALIAS_FLAG)
         override fun onDraw(c: Canvas) {
-            val w = a.dp(if (compact) 32 else 40).toFloat()
-            val h = a.dp(if (compact) 18 else 22).toFloat()
+            val w = a.dp(if (compact) 36 else 46).toFloat()
+            val h = a.dp(if (compact) 22 else 28).toFloat()
             val left = (width - w) / 2f
             val cy = height / 2f
-            pen.color = mix(a.palette.raised, a.palette.accent, knob).let { if (compact) it.withOpacity(0xD0) else it }
             val rect = RectF(left, cy - h / 2, left + w, cy + h / 2)
             pen.style = Paint.Style.FILL
+            pen.color = mix(a.palette.raised, a.palette.accent, knob)
             c.drawRoundRect(rect, h, h, pen)
-            if (!checked) {
-                pen.color = a.palette.stroke; pen.style = Paint.Style.STROKE; pen.strokeWidth = a.dp(1).toFloat()
-                c.drawRoundRect(rect, h, h, pen); pen.style = Paint.Style.FILL
+            if (knob < 1f) {
+                val inset = a.dp(1).toFloat()
+                pen.color = a.palette.muted.withOpacity(((1f - knob) * 0x70).toInt())
+                pen.style = Paint.Style.STROKE; pen.strokeWidth = inset * 1.5f
+                c.drawRoundRect(RectF(rect.left + inset, rect.top + inset, rect.right - inset, rect.bottom - inset), h, h, pen)
+                pen.style = Paint.Style.FILL
             }
             pen.color = mix(a.palette.muted, a.palette.onAccent, knob)
-            val r = a.dp(if (compact) 5 else 6).toFloat() + knob * a.dp(1)
+            val r = h / 2f - a.dp(if (compact) 5 else 6) + knob * a.dp(2)
             c.drawCircle(left + h / 2f + knob * (w - h), cy, r, pen)
         }
     }
@@ -209,7 +216,7 @@ internal class ToggleControl(private val a: MainActivity, label: String, value: 
         labelView.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         indicator.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         addView(labelView, LayoutParams(if (compact) -2 else 0, -2, if (compact) 0f else 1f))
-        addView(indicator, LayoutParams(a.dp(if (compact) 34 else 44), a.dp(40)).apply { marginStart = a.dp(9) })
+        addView(indicator, LayoutParams(a.dp(if (compact) 40 else 52), a.dp(40)).apply { marginStart = a.dp(8) })
         a.clickable(this, Color.TRANSPARENT, 12) { if (isEnabled) toggle() }
     }
     override fun isChecked() = checked
@@ -247,18 +254,17 @@ internal fun MainActivity.switch(parent: LinearLayout, label: String, checked: B
     parent.addView(this, LinearLayout.LayoutParams(-1, -2))
 }
 internal fun MainActivity.selector(parent: LinearLayout, label: String, current: String, values: List<String>, selected: Int, onPick: (Int) -> Unit) {
-    val item = row().apply { minimumHeight = dp(54) }
+    val item = row().apply { minimumHeight = dp(52) }
     val field = row().apply {
-        setPadding(dp(12), dp(4), dp(6), dp(4))
-        background = shape(palette.raised, 12, palette.stroke)
-        minimumHeight = dp(36)
+        setPadding(dp(10), dp(4), dp(2), dp(4))
+        minimumHeight = dp(40)
     }
     item.addView(text(label, 15), LinearLayout.LayoutParams(0, -2, 1f))
-    field.addView(text(current, 13, palette.accent, true).apply {
-        maxWidth = dp(157); maxLines = 1; ellipsize = TextUtils.TruncateAt.END
+    field.addView(text(current, 14, palette.muted).apply {
+        maxWidth = dp(170); maxLines = 1; ellipsize = TextUtils.TruncateAt.END
     })
-    val chevron = GlyphView(this, Glyph.DOWN, palette.accent)
-    field.addView(chevron, LinearLayout.LayoutParams(dp(23), dp(25)))
+    val chevron = GlyphView(this, Glyph.DOWN, palette.muted)
+    field.addView(chevron, LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginStart = dp(2) })
     item.addView(field)
     item.contentDescription = "$label，$current，下拉选项"
     clickable(item, Color.TRANSPARENT, 12) {
@@ -272,24 +278,24 @@ internal fun MainActivity.selector(parent: LinearLayout, label: String, current:
 internal fun MainActivity.popup(anchor: View, choices: List<String>, selected: Int = -1,
                                 dangerIndices: Set<Int> = emptySet(), onDismiss: () -> Unit = {}, onPick: (Int) -> Unit) {
     if (!anchor.isAttachedToWindow || choices.isEmpty()) return
-    val content = vertical().apply { background = shape(palette.surface, 20, palette.stroke); setPadding(dp(5), dp(5), dp(5), dp(5)) }
-    val popup = PopupWindow(content, maxOf(anchor.width, dp(182)).coerceAtMost(root.width.coerceAtLeast(dp(182))), -2, true)
+    val content = vertical().apply { background = shape(palette.floating, 16, palette.outline); setPadding(dp(6), dp(6), dp(6), dp(6)) }
+    val popup = PopupWindow(content, maxOf(anchor.width, dp(196)).coerceAtMost(root.width.coerceAtLeast(dp(196))), -2, true)
     popup.isOutsideTouchable = true
     popup.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-    popup.elevation = dp(13).toFloat()
+    popup.elevation = dp(12).toFloat()
     popup.inputMethodMode = PopupWindow.INPUT_METHOD_NOT_NEEDED
     popup.animationStyle = 0
     popup.setOnDismissListener(onDismiss)
     val scroll = ScrollView(this).apply { overScrollMode = View.OVER_SCROLL_NEVER; isVerticalScrollBarEnabled = false }
     val list = vertical()
     scroll.addView(list)
-    content.addView(scroll, LinearLayout.LayoutParams(-1, if (choices.size > 6) dp(270) else -2))
+    content.addView(scroll, LinearLayout.LayoutParams(-1, if (choices.size > 6) dp(290) else -2))
     choices.forEachIndexed { i, title ->
-        val line = row().apply { setPadding(dp(12), dp(5), dp(9), dp(5)); minimumHeight = dp(45); isSelected = i == selected }
+        val line = row().apply { setPadding(dp(14), dp(6), dp(10), dp(6)); minimumHeight = dp(48); isSelected = i == selected }
         val tint = when { i in dangerIndices -> palette.red; i == selected -> palette.accent; else -> palette.text }
-        line.addView(text(title, 14, tint, i == selected || i in dangerIndices), LinearLayout.LayoutParams(0, -2, 1f))
+        line.addView(text(title, 15, tint, i == selected || i in dangerIndices), LinearLayout.LayoutParams(0, -2, 1f))
         if (i == selected) line.addView(GlyphView(this, Glyph.CHECK, palette.accent), LinearLayout.LayoutParams(dp(24), dp(24)))
-        clickable(line, if (i == selected) palette.raised else Color.TRANSPARENT, 12) { popup.dismiss(); onPick(i) }
+        clickable(line, if (i == selected) palette.accentSoft else Color.TRANSPARENT, 10) { popup.dismiss(); onPick(i) }
         list.addView(line, LinearLayout.LayoutParams(-1, -2))
     }
     popup.showAsDropDown(anchor, 0, dp(4), Gravity.END)
@@ -307,26 +313,26 @@ internal fun MainActivity.panelDialog(title: String, message: String = "", posit
                                       custom: View? = null, positiveAction: () -> Unit = {}) {
     val dialog = Dialog(this).apply { requestWindowFeature(android.view.Window.FEATURE_NO_TITLE) }
     val card = vertical().apply {
-        setPadding(dp(21), dp(19), dp(21), dp(17)); background = shape(palette.surface, 27, palette.stroke)
+        setPadding(dp(24), dp(24), dp(20), dp(18)); background = shape(palette.floating, 28, palette.outline)
     }
-    card.label(title, 22, bold = true)
-    if (message.isNotBlank()) card.label(message, 15, palette.muted, gap = 10)
-    if (custom != null) card.addView(custom, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) })
+    card.label(title, 20, bold = true).apply { setPadding(0, 0, dp(4), 0) }
+    if (message.isNotBlank()) card.label(message, 15, palette.muted, gap = 12).apply { setPadding(0, 0, dp(4), 0) }
+    if (custom != null) card.addView(custom, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18); marginEnd = dp(4) })
     val actions = row().apply { gravity = Gravity.END }
-    negative?.let { actions.addView(button(it) { dialog.dismiss() }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(8) }) }
+    negative?.let { actions.addView(button(it, tone = Tone.QUIET) { dialog.dismiss() }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(6) }) }
     actions.addView(button(positive, true) { dialog.dismiss(); positiveAction() })
-    card.addView(actions, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
+    card.addView(actions, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(22) })
     val contents = ScrollView(this).apply { isVerticalScrollBarEnabled = false; clipToPadding = false; addView(card) }
     dialog.setContentView(contents)
     dialog.window?.let { w ->
         w.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-        w.setDimAmount(.52f)
+        w.setDimAmount(.5f)
         w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
         w.setWindowAnimations(0)
     }
     dialog.show()
-    dialog.window?.setLayout(minOf(root.width - dp(38), dp(426)).coerceAtLeast(dp(215)), -2)
+    dialog.window?.setLayout(minOf(root.width - dp(48), dp(400)).coerceAtLeast(dp(260)), -2)
     if (motionEnabled()) {
         card.alpha = .1f; card.translationY = dp(11).toFloat(); card.scaleX = .985f; card.scaleY = .985f
         card.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(240).setInterpolator(settle).start()

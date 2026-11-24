@@ -28,7 +28,7 @@ internal fun MainActivity.renderStats() {
     val config = config
     val today = config.date(ms)
     val hour = localHour(ms)
-    val rate = if (config.asleep(hour)) String.format(Locale.ROOT, "当前每分钟扣 %.2f 分", config.rate(hour)) else null
+    val asleep = config.asleep(hour)
     val page = FrameLayout(this)
     val (scroll, content) = scrollBox(body, 18)
     body.removeView(scroll)
@@ -36,27 +36,27 @@ internal fun MainActivity.renderStats() {
         setPadding(0, dp(12), 0, dp(14))
         minimumHeight = dp(71)
         val texts = vertical().apply {
-            label("睡眠分数", 28, bold = true)
-            if (rate != null) label(rate, 12, palette.muted, gap = 6)
+            label("睡眠分数", TypeScale.HEADLINE, bold = true)
+            if (asleep) label(String.format(Locale.ROOT, "当前每分钟扣 %.2f 分", config.rate(hour)), TypeScale.CAPTION, palette.muted, gap = 6).numeric()
         }
         addView(texts, LinearLayout.LayoutParams(0, -2, 1f))
         val refresh = iconButton(Glyph.REFRESH, if (refreshing) "刷新中" else "刷新") { refresh(true) }
-        addView(refresh, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginStart = dp(7) })
+        if (refreshing) refresh.alpha = .45f
+        addView(refresh, LinearLayout.LayoutParams(dp(48), dp(48)))
         val about = iconButton(Glyph.INFO, "关于") {
             panelDialog("关于睡眠分数", "连续记录按每 ${config.number("cycleLengthDays")} 天分为一个周期。睡眠区 ${clockHour(config.start)}–${clockHour(config.end)} 内，空闲分钟得分，手机使用按小时费率扣分。百分比以周期理论分值为基准，额外加分可使结果超出原范围。", "功能介绍", "关闭") {
                 open(Screen("question", "功能介绍1"))
             }
         }
-        addView(about, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginStart = dp(7) })
+        addView(about, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginStart = dp(2) })
     }
-    content.addView(contentHeader, 0)
+    content.addView(contentHeader, 0, LinearLayout.LayoutParams(-1, -2).apply { marginEnd = -dp(10) })
     page.addView(scroll, FrameLayout.LayoutParams(-1, -1))
-    val compactTitle = text("睡眠分数", 15, palette.text, true).apply {
+    val compactTitle = text("睡眠分数", 16, palette.text, true).apply {
         gravity = Gravity.CENTER
         alpha = 0f
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        background = shape(palette.bg.withOpacity(0xEE), 0)
-        elevation = dp(2).toFloat()
+        background = shape(palette.bg.withOpacity(0xF2), 0)
     }
     page.addView(compactTitle, FrameLayout.LayoutParams(-1, dp(52), Gravity.TOP))
     fun updateTitle() {
@@ -77,50 +77,59 @@ internal fun MainActivity.renderStats() {
     val percentage = config.flag("usePercentageScoring")
     val started = percentage && config.scoringStarted(today, ms)
     val detailed = !config.flag("hideDetail")
+    val pending = current == null || percentage && current.notStarted(today, started)
+    val pct = current?.percent() ?: 0
+
     val hero = content.card(gap = 2)
-    val gradient = GradientDrawable(GradientDrawable.Orientation.TL_BR,
-        if (palette.dark) intArrayOf(color("#313B66"), color("#222B49"), color("#1A2136"))
-        else intArrayOf(color("#DCE5FF"), color("#F7F8FF")))
-    gradient.cornerRadius = dp(21).toFloat()
-    hero.background = gradient
-    hero.label("当前周期", 13, palette.accent, bold = true)
-    hero.label("${clockHour(config.start)}–${clockHour(config.end)} · 睡眠计分时段", 11, palette.muted, gap = 6)
+    hero.background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+        if (palette.dark) intArrayOf(color("#2A3366"), color("#1E2442"), color("#171B2B"))
+        else intArrayOf(color("#E1E6FF"), color("#F6F7FF"))).apply {
+        cornerRadius = dp(22).toFloat()
+        setStroke(maxOf(1, dp(1)), palette.stroke)
+    }
+    hero.label("当前周期", TypeScale.LABEL, palette.accent, bold = true)
+    hero.label("${clockHour(config.start)}–${clockHour(config.end)} · 睡眠计分时段", TypeScale.CAPTION, palette.muted, gap = 6).numeric()
     val metrics = row().apply { gravity = Gravity.CENTER_VERTICAL }
     val main = vertical()
     val value = when {
         current == null -> "暂无数据"
-        percentage && current.notStarted(today, started) -> "未开始"
-        percentage -> "${current.percent()}%"
+        pending -> "未开始"
+        percentage -> "$pct%"
         else -> signed(current.net)
     }
-    main.label(value, if (value.length > 5) 37 else 53, palette.text, true, 12).typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
-    main.label(if (current == null) today else "${current.days.first().date} ～ ${current.days.last().date}", 12, palette.muted, gap = 6)
+    main.label(value, if (value.length > 5) 37 else TypeScale.DISPLAY, if (pending) palette.muted else palette.text, gap = 12).apply {
+        typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+        numeric()
+    }
+    main.label(if (current == null) today else "${current.days.first().date} – ${current.days.last().date}", TypeScale.CAPTION, palette.muted, gap = 6).numeric()
     metrics.addView(main, LinearLayout.LayoutParams(0, -2, 1f))
     metrics.addView(MoonArt(this), LinearLayout.LayoutParams(dp(113), dp(112)))
     hero.addView(metrics)
     if (current != null) {
         val bonus = if (detailed) "额外加扣分 ${signed(current.bonus)}" else if (current.days.any { it.bonus != 0L }) "有额外加扣分" else "无额外加扣分"
-        hero.label(bonus, 13, palette.muted, gap = 6)
+        hero.label(bonus, TypeScale.LABEL, palette.muted, gap = 6).numeric()
     }
-    hero.action("查看今日时间轴  ›", primary = true) { open(Screen("timeline", today)) }
+    hero.action("查看今日时间轴", primary = true) { open(Screen("timeline", today)) }
+
     section(content, "历史周期")
-    if (cycles.isEmpty()) content.card().label("暂无数据", 15, palette.muted)
+    if (cycles.isEmpty()) content.card().label("暂无数据", TypeScale.BODY, palette.muted)
     for (cycle in cycles.asReversed()) {
         val card = content.card()
+        val idle = percentage && cycle.notStarted(today, started)
         val header = row()
-        header.addView(text("周期 ${String.format(Locale.ROOT, "%02d", cycle.index + 1)}", 16, palette.text, true), LinearLayout.LayoutParams(0, -2, 1f))
-        val score = if (percentage) if (cycle.notStarted(today, started)) "未开始" else "${cycle.percent()}%" else "${cycle.net} 分"
-        header.addView(text(score, 20, scoreColor(cycle.percent()), true))
+        header.addView(text("周期 ${String.format(Locale.ROOT, "%02d", cycle.index + 1)}", 16, palette.text, true).numeric(), LinearLayout.LayoutParams(0, -2, 1f))
+        val score = if (percentage) if (idle) "未开始" else "${cycle.percent()}%" else "${cycle.net} 分"
+        header.addView(text(score, 20, if (idle) palette.muted else scoreColor(cycle.percent()), true).numeric())
         card.addView(header)
-        card.label("${cycle.days.first().date} ～ ${cycle.days.last().date}  ·  ${if (percentage) "百分比制" else "原始分制"}", 12, palette.muted, gap = 4)
-        if (detailed) card.label("原始 ${cycle.net} 分  ·  理论 ${cycle.min} ～ ${cycle.max} 分  ·  额外 ${signed(cycle.bonus)}", 12, palette.muted, gap = 7)
-        else card.label(if (cycle.days.any { it.bonus != 0L }) "有额外加扣分" else "无额外加扣分", 12, palette.muted, gap = 7)
+        card.label("${cycle.days.first().date} – ${cycle.days.last().date}  ·  ${if (percentage) "百分比制" else "原始分制"}", TypeScale.CAPTION, palette.muted, gap = 4).numeric()
+        if (detailed) card.label("原始 ${cycle.net} 分  ·  理论 ${cycle.min} ～ ${cycle.max} 分  ·  额外 ${signed(cycle.bonus)}", TypeScale.CAPTION, palette.muted, gap = 7).numeric()
+        else card.label(if (cycle.days.any { it.bonus != 0L }) "有额外加扣分" else "无额外加扣分", TypeScale.CAPTION, palette.muted, gap = 7)
         cycle.recentDays.forEach { day ->
-            if (detailed) entry(card, day.date, "${day.score} − ${day.deduction} ${if (day.bonus == 0L) "" else " ${signed(day.bonus)}"} = ${day.net}") { open(Screen("timeline", day.date)) }
-            else card.label("${day.date}    有数据", 13, palette.muted, gap = 8)
+            if (detailed) entry(card, day.date, "${day.score} − ${day.deduction}${if (day.bonus == 0L) "" else "  ${signed(day.bonus)}"} = ${day.net}") { open(Screen("timeline", day.date)) }
+            else card.label("${day.date}    有数据", TypeScale.LABEL, palette.muted, gap = 8).numeric()
         }
     }
-    if (config.flag("showDebugInfo")) content.label("当前日期键 $today · ${cycles.sumOf { it.days.size }} 个日期", 12, palette.muted, gap = 16)
+    if (config.flag("showDebugInfo")) content.label("当前日期键 $today · ${cycles.sumOf { it.days.size }} 个日期", TypeScale.CAPTION, palette.muted, gap = 16)
 }
 internal fun clockHour(hour: Int) = String.format(Locale.ROOT, "%02d:00", hour)
 private fun hourRange(at: Long) = "${format(at, "HH:mm")}~${format(nextHourStart(at), "HH:mm")}"
@@ -199,26 +208,52 @@ internal fun MainActivity.renderTimeline(date: String) {
     val controls = row()
     val groups = vertical()
     val bodies = linkedMapOf<Long, LinearLayout>()
-    controls.addView(button("全部展开") { timelineCollapsed.clear(); bodies.values.forEach { it.visibility = android.view.View.VISIBLE } }, LinearLayout.LayoutParams(0, -2, 1f))
-    controls.addView(button("全部收起") { timelineCollapsed.addAll(bodies.keys); bodies.values.forEach { it.visibility = android.view.View.GONE } }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(8) })
-    content.addView(controls)
+    val chevrons = linkedMapOf<Long, View>()
+    fun setAll(expanded: Boolean) {
+        if (expanded) timelineCollapsed.clear() else timelineCollapsed.addAll(bodies.keys)
+        bodies.values.forEach { it.visibility = if (expanded) View.VISIBLE else View.GONE }
+        chevrons.values.forEach { it.rotation = if (expanded) 180f else 0f }
+    }
+    controls.addView(button("全部展开") { setAll(true) }, LinearLayout.LayoutParams(0, -2, 1f))
+    controls.addView(button("全部收起") { setAll(false) }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(8) })
+    content.addView(controls, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
     content.addView(groups)
     if (data.groups.isEmpty()) content.card().label("暂无数据", tint = palette.muted)
+    val records = data.records.associateBy { it.at }
     for (g in data.groups) {
-        val card = groups.card()
-        val lines = vertical()
-        lines.visibility = if (g.at in timelineCollapsed) android.view.View.GONE else android.view.View.VISIBLE
-        card.label(g.heading, 14, palette.accent, bold = true).apply {
-            clickable(this, Color.TRANSPARENT, 8) {
-                if (motionEnabled()) android.transition.TransitionManager.beginDelayedTransition(groups,
-                    android.transition.AutoTransition().apply { duration = 205; interpolator = settle })
-                if (!timelineCollapsed.add(g.at)) timelineCollapsed.remove(g.at)
-                lines.visibility = if (g.at in timelineCollapsed) android.view.View.GONE else android.view.View.VISIBLE
-            }
+        val card = groups.card().apply { setPadding(dp(17), dp(8), dp(10), dp(8)) }
+        val record = records[g.at]
+        val header = row().apply { minimumHeight = dp(40) }
+        val summary = if (record != null) "${hourRange(g.at)}  ·  ${durationText(record.usage)}" else hourRange(g.at)
+        header.addView(text(summary, 14, palette.accent, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }.numeric(),
+            LinearLayout.LayoutParams(0, -2, 1f))
+        if (record != null) {
+            val tags = listOfNotNull(
+                if (record.score > 0) "+${record.score}" to palette.green else null,
+                if (record.deduction > 0) "−${record.deduction}" to palette.red else null,
+                if (record.bonus > 0) "奖励 +${record.bonus}" to palette.amber else null)
+            tags.forEach { (label, tint) -> header.addView(chip(label, tint), LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(6) }) }
         }
-        for (line in g.lines) lines.label(line, 13, palette.muted, gap = 7)
-        if (g.lines.isEmpty()) lines.label("无应用或屏幕事件", 13, palette.muted, gap = 7)
+        val collapsed = g.at in timelineCollapsed
+        val chevron = GlyphView(this, Glyph.DOWN, palette.muted).apply { rotation = if (collapsed) 0f else 180f }
+        header.addView(chevron, LinearLayout.LayoutParams(dp(28), dp(28)).apply { marginStart = dp(4) })
+        val lines = vertical().apply { setPadding(0, 0, dp(6), dp(8)) }
+        lines.visibility = if (collapsed) View.GONE else View.VISIBLE
+        header.contentDescription = g.heading
+        clickable(header, Color.TRANSPARENT, 12) {
+            if (motionEnabled()) android.transition.TransitionManager.beginDelayedTransition(groups,
+                android.transition.AutoTransition().apply { duration = 205; interpolator = settle })
+            if (!timelineCollapsed.add(g.at)) timelineCollapsed.remove(g.at)
+            val open = g.at !in timelineCollapsed
+            lines.visibility = if (open) View.VISIBLE else View.GONE
+            if (motionEnabled()) chevron.animate().rotation(if (open) 180f else 0f).setDuration(205).setInterpolator(settle).start()
+            else chevron.rotation = if (open) 180f else 0f
+        }
+        card.addView(header)
+        g.lines.forEachIndexed { i, line -> lines.label(line, TypeScale.LABEL, palette.muted, gap = if (i == 0) 4 else 7).numeric() }
+        if (g.lines.isEmpty()) lines.label("无应用或屏幕事件", TypeScale.LABEL, palette.muted, gap = 2)
         card.addView(lines)
         bodies[g.at] = lines
+        chevrons[g.at] = chevron
     }
 }

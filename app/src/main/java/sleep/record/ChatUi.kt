@@ -104,15 +104,15 @@ internal class ChatUi(private val a: MainActivity) {
             chat.text("subType") == "ROLEPLAY" -> "角色扮演"
             else -> "普通对话"
         }
-        val marker = text(if (chat.taskChat()) "任" else name.take(1), 14, palette.accent, true).apply {
-            gravity = Gravity.CENTER; background = shape(palette.raised, 12)
+        val marker = text(if (chat.taskChat()) "任" else name.take(1), 15, if (active) palette.onAccent else palette.accent, true).apply {
+            gravity = Gravity.CENTER; background = shape(if (active) palette.accent else palette.accentSoft, 20)
         }
-        conversation.addView(marker, LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(10) })
+        conversation.addView(marker, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(12) })
         conversation.addView(vertical().apply {
-            label(name, 15, bold = active).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
-            label(status, 11, palette.muted, gap = 4)
+            label(name, 15, bold = true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+            label(status, 12, palette.muted, gap = 4)
         }, LinearLayout.LayoutParams(0, -2, 1f))
-        clickable(conversation, Color.TRANSPARENT, 12) { switchTo(id) }
+        clickable(conversation, Color.TRANSPARENT, 16) { switchTo(id) }
         line.addView(conversation, LinearLayout.LayoutParams(0, -1, 1f))
         if (allowDelete) {
             lateinit var menu: View
@@ -126,9 +126,9 @@ internal class ChatUi(private val a: MainActivity) {
                     }
                 }
             }
-            line.addView(menu, LinearLayout.LayoutParams(dp(43), dp(42)))
-        } else if (active) line.addView(GlyphView(this, Glyph.CHECK, palette.accent), LinearLayout.LayoutParams(dp(37), dp(37)))
-        line.background = shape(if (active) palette.raised else palette.surface, 16, if (active) palette.stroke else null)
+            line.addView(menu, LinearLayout.LayoutParams(dp(44), dp(44)))
+        } else if (active) line.addView(GlyphView(this, Glyph.CHECK, palette.accent), LinearLayout.LayoutParams(dp(40), dp(40)))
+        line.background = shape(if (active) palette.accentSoft else Color.TRANSPARENT, 18)
         parent.addView(line, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
     }
     fun show() = with(a) {
@@ -239,12 +239,13 @@ internal class ChatUi(private val a: MainActivity) {
                 meta.addView(reply, LinearLayout.LayoutParams(-2, -2))
                 panel.addView(meta, LinearLayout.LayoutParams(-1, dp(43)))
             }
-            composer.background = shape(controlFill, 16, palette.stroke.withOpacity(0xA0))
-            composer.minHeight = dp(52)
+            composer.background = shape(controlFill, 24, palette.stroke.withOpacity(0x90))
+            composer.minHeight = dp(48)
             composer.maxHeight = dp(176)
-            composer.setPadding(dp(14), dp(10), dp(14), dp(9))
+            composer.setPadding(dp(16), dp(12), dp(16), dp(11))
             controls.addView(composer, LinearLayout.LayoutParams(0, -2, 1f))
-            val send = iconButton(Glyph.SEND, "发送", fill = controlFill) {
+            val idle = stream == null
+            val send = iconButton(Glyph.SEND, "发送", fill = if (idle) palette.accent else palette.raised, tint = if (idle) palette.onAccent else palette.muted) {
                 val value = composer.text.toString().trim()
                 if (value.isNotBlank() && stream == null) {
                     val request = chats.send(id, value, auto == true)
@@ -279,15 +280,20 @@ internal class ChatUi(private val a: MainActivity) {
         }
         column.addView(nameLabel, LinearLayout.LayoutParams(-2, -2))
         val fill = when {
-            system -> if (palette.dark) color("#293D63") else color("#E2EBFB")
-            own -> palette.raised
+            system -> palette.raised
+            own -> palette.accentSoft
             else -> palette.surface
         }
-        val message = text(value, 15, if (system) palette.accent else palette.text).apply {
+        val message = text(value, if (system) 13 else 15, if (system) palette.muted else palette.text).apply {
             maxWidth = width
             gravity = if (system) Gravity.CENTER else Gravity.START
-            setPadding(dp(13), dp(9), dp(13), dp(10))
-            background = shape(fill, 15, if (system) null else palette.stroke)
+            if (system) setPadding(dp(14), dp(7), dp(14), dp(7)) else setPadding(dp(14), dp(10), dp(14), dp(11))
+            background = shape(fill, if (system) 14 else 18, if (system || own) null else palette.outline).apply {
+                if (!system) {
+                    val r = dp(18).toFloat(); val tail = dp(6).toFloat()
+                    cornerRadii = if (own) floatArrayOf(r, r, tail, tail, r, r, r, r) else floatArrayOf(tail, tail, r, r, r, r, r, r)
+                }
+            }
         }
         column.addView(message, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(5) })
         if (time.isNotEmpty()) {
@@ -416,15 +422,15 @@ internal class ChatUi(private val a: MainActivity) {
             val name = text(label, 15, palette.text)
             line.addView(name, LinearLayout.LayoutParams(0, -2, 1f))
             line.addView(text(description, 13, palette.muted), LinearLayout.LayoutParams(-2, -2))
-            val arrow = GlyphView(this, Glyph.DOWN, palette.muted).apply { rotation = -90f }
+            val arrow = GlyphView(this, Glyph.NEXT, palette.muted)
             line.addView(arrow, LinearLayout.LayoutParams(dp(22), dp(24)))
             clickable(line, Color.TRANSPARENT, 12) { onRole(line) }
             line
         }
         c.roles().filter { it.text("type") == "system" }.forEach { role ->
-            val line = row().apply { minimumHeight = dp(42); setPadding(dp(9), dp(2), dp(9), dp(2)) }
-            line.addView(text("system · 系统", 15, palette.text), LinearLayout.LayoutParams(0, -2, 1f))
-            line.background = shape(palette.surface, 12, palette.stroke)
+            val line = row().apply { minimumHeight = dp(44); setPadding(dp(12), dp(2), dp(12), dp(2)) }
+            line.addView(text("system · 系统", 14, palette.muted), LinearLayout.LayoutParams(0, -2, 1f))
+            line.background = shape(palette.raised, 12)
             roles.addView(line)
         }
         val activeRoles = c.roles().filter { it.text("type") != "system" && !it.optBoolean("archived") }
