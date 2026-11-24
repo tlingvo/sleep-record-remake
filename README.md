@@ -2,14 +2,18 @@
 
 睡时记录是一款 Android 应用，按自定义作息时段统计手机使用情况，把夜间使用、锁屏事件和任务加分汇总成每日与周期得分。它依据系统使用情况记录计分，不测量实际入睡时间。
 
-[下载 v2.2.1 APK](https://github.com/tlingvo/sleep-record-remake/releases/download/v2.2.1/sleep-record-2.2.1-debug.apk) · [版本说明](https://github.com/tlingvo/sleep-record-remake/releases/tag/v2.2.1) · 支持 Android 7.0（API 24）及以上
+[下载 v3.0.0 APK](https://github.com/tlingvo/sleep-record-remake/releases/download/v3.0.0/sleep-record-3.0.0-debug.apk) · [版本说明](https://github.com/tlingvo/sleep-record-remake/releases/tag/v3.0.0) · 支持 Android 7.0（API 24）及以上
+
+## v3.0.0 · WebView 界面重写
+
+统计、对话、任务和设置均已重写为 Android WebView 中的页面。HTML、CSS、JavaScript 和字体随 APK 打包，界面可以离线加载。计分、使用情况采集、备份、音频播放和 AI 请求由 Android 原生 Kotlin 代码处理，页面通过异步桥接调用。
 
 ## 功能
 
-- **统计与时间轴**：可调整每日起始时间、睡眠时段和周期长度。首页大标题随滚动收起为居中小标题；按小时查看应用使用与锁屏明细，同一应用间隔不超过 1 秒的相邻片段合并为一行显示（不改动记录），支持导出时间轴。
+- **统计与时间轴**：可调整每日起始时间、睡眠时段和周期长度。按小时查看应用使用与锁屏明细，支持导出时间轴。同一应用间隔不超过 1 秒的相邻片段会在界面上合并显示。
 - **任务与休息**：每日打卡、短休息、长休息、早睡挑战和问答任务，内置可离线播放的睡前音频。
-- **对话**：支持离线自我对话、角色扮演和 AI 任务会话。可在设置中显示角色头像；消息名称与时间位于气泡外，系统消息单独居中显示。半透明磨砂输入栏随聊天内容实时更新。会话列表从左侧滑出，切换时不必离开聊天页。
-- **界面**：底栏四页支持横向滑动，问答有页面过渡；设置按分组列表排列，部分详情以底部面板呈现。支持浅色、深色和跟随系统主题，启动画面和系统栏随所选主题切换。任务页切换分类时只滑动内容区，修改设置或开关不会让页面跳回顶部，底部面板在输入法弹出时保持标题和输入框可见。
+- **对话**：支持离线自我对话、角色扮演和 AI 任务会话。可在聊天页打开侧边会话列表、切换角色和设置头像。AI 生成的回复按流式片段显示。
+- **界面**：主页面支持底栏与横向手势导航，支持浅色、深色和跟随系统主题。详情、对话和问答页面适配 Android 返回手势、系统栏安全区和软键盘。
 
 ## 安装与迁移
 
@@ -25,7 +29,7 @@
 
 ## 构建与测试
 
-使用 JDK 21、Android SDK Platform 36.1 和仓库自带的 Gradle Wrapper。在项目根目录执行：
+使用 JDK 21、Android SDK Platform 36.1 和仓库自带的 Gradle Wrapper。前端源码位于 [`app/src/main/assets/web`](app/src/main/assets/web)，由 Gradle 直接打包。在项目根目录执行以下命令。
 
 ```powershell
 .\gradlew.bat :app:assembleDebug
@@ -42,7 +46,7 @@ adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 adb shell am instrument -w sleep.record.test/sleep.record.ContractRunner
 ```
 
-v2.2.1 已通过 23 项 Android 自动验收，覆盖计分与日期归属、周期断点、旧版 JSON 导入、挑战与休息结算、AI 流式响应解析，以及时间轴片段合并。
+v3.0.0 已通过 24 项 Android 自动验收，覆盖计分与日期归属、周期断点、旧版 JSON 导入、挑战与休息结算、角色提示词与备份、AI 流式响应解析，以及时间轴片段合并。
 
 ## 项目文档
 
